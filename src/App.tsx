@@ -4,15 +4,16 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Sparkles, 
-  X, 
-  ImageIcon, 
+import {
+  Sparkles,
+  X,
+  ImageIcon,
   Layout,
   Plus,
   Maximize2,
   Loader2,
-  ChevronRight
+  ChevronRight,
+  ChevronLeft
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { get, set } from 'idb-keyval';
@@ -159,6 +160,25 @@ function AppContent() {
   const [hasKey, setHasKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Lightbox gallery context — derive image list from current active tab
+  const lightboxImages = React.useMemo(() => {
+    if (!fullscreenImage) return [] as string[];
+    if (activeTab === 'create') return results;
+    if (activeTab === 'history') return history;
+    if (activeTab === 'favorites') return likedImages;
+    return [fullscreenImage];
+  }, [fullscreenImage, activeTab, results, history, likedImages]);
+
+  const lightboxIndex = fullscreenImage ? lightboxImages.indexOf(fullscreenImage) : -1;
+
+  const handleLightboxPrev = React.useCallback(() => {
+    if (lightboxIndex > 0) setFullscreenImage(lightboxImages[lightboxIndex - 1]);
+  }, [lightboxIndex, lightboxImages]);
+
+  const handleLightboxNext = React.useCallback(() => {
+    if (lightboxIndex < lightboxImages.length - 1) setFullscreenImage(lightboxImages[lightboxIndex + 1]);
+  }, [lightboxIndex, lightboxImages]);
+
   const mouseX = useMotionValue(0);
   const mouseY = useMotionValue(0);
   const springX = useSpring(mouseX, { damping: 50, stiffness: 400 });
@@ -236,9 +256,21 @@ function AppContent() {
     }
   };
 
+  // Keyboard navigation for lightbox
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!fullscreenImage) return;
+      if (e.key === 'ArrowLeft') handleLightboxPrev();
+      else if (e.key === 'ArrowRight') handleLightboxNext();
+      else if (e.key === 'Escape') setFullscreenImage(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [fullscreenImage, handleLightboxPrev, handleLightboxNext]);
+
   useEffect(() => {
     checkKey();
-    
+
     const handlePaste = (e: ClipboardEvent) => {
       // Skip if target is an input or textarea
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -682,25 +714,72 @@ function AppContent() {
       <main className="max-w-7xl mx-auto p-6 relative z-10">
         <AnimatePresence>
           {fullscreenImage && (
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[100] bg-zinc-950/95 backdrop-blur-xl flex items-center justify-center p-4"
+              className="fixed inset-0 z-[100] bg-zinc-950/97 backdrop-blur-2xl flex items-center justify-center p-4"
               onClick={() => setFullscreenImage(null)}
             >
-              <button 
-                onClick={() => setFullscreenImage(null)} 
-                className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors"
+              {/* Close */}
+              <button
+                onClick={() => setFullscreenImage(null)}
+                className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors z-10"
               >
                 <X className="w-6 h-6" />
               </button>
-              <img 
-                src={fullscreenImage} 
-                className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl" 
+
+              {/* Counter */}
+              {lightboxImages.length > 1 && (
+                <div className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-2 bg-white/10 backdrop-blur-sm rounded-full text-xs font-black text-white tracking-widest z-10">
+                  {lightboxIndex + 1} / {lightboxImages.length}
+                </div>
+              )}
+
+              {/* Prev */}
+              {lightboxIndex > 0 && (
+                <motion.button
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  onClick={(e) => { e.stopPropagation(); handleLightboxPrev(); }}
+                  className="absolute left-6 top-1/2 -translate-y-1/2 p-4 bg-white/10 hover:bg-white/20 text-white rounded-full transition-all hover:scale-110 z-10"
+                >
+                  <ChevronLeft className="w-7 h-7" />
+                </motion.button>
+              )}
+
+              {/* Image */}
+              <motion.img
+                key={fullscreenImage}
+                initial={{ opacity: 0, scale: 0.97 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.15 }}
+                src={fullscreenImage}
+                className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl"
                 onClick={(e) => e.stopPropagation()}
                 referrerPolicy="no-referrer"
               />
+
+              {/* Next */}
+              {lightboxIndex < lightboxImages.length - 1 && (
+                <motion.button
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  onClick={(e) => { e.stopPropagation(); handleLightboxNext(); }}
+                  className="absolute right-6 top-1/2 -translate-y-1/2 p-4 bg-white/10 hover:bg-white/20 text-white rounded-full transition-all hover:scale-110 z-10"
+                >
+                  <ChevronRight className="w-7 h-7" />
+                </motion.button>
+              )}
+
+              {/* Keyboard hint */}
+              {lightboxImages.length > 1 && (
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 text-[10px] text-zinc-500 font-black uppercase tracking-widest">
+                  <span>← → навигация</span>
+                  <span>·</span>
+                  <span>ESC закрыть</span>
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>

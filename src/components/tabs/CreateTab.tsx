@@ -1,16 +1,19 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Plus, 
-  X, 
-  ImageIcon, 
-  Layout, 
-  Upload, 
-  Settings, 
-  Sparkles, 
-  Loader2, 
-  Maximize2, 
-  AlertTriangle 
+import {
+  Plus,
+  X,
+  ImageIcon,
+  Layout,
+  Upload,
+  Settings,
+  Sparkles,
+  Loader2,
+  Maximize2,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  Code2
 } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
 
@@ -87,8 +90,10 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   RESOLUTIONS,
   isDraggingRef
 }) => {
+  const [showPromptPreview, setShowPromptPreview] = React.useState(false);
+
   return (
-    <motion.div 
+    <motion.div
       key="create"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
@@ -361,116 +366,206 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                     />
                   </button>
                 </div>
+
+                {/* Prompt Preview */}
+                <div className="border-t border-white/5 pt-6 space-y-3">
+                  <button
+                    onClick={() => setShowPromptPreview(!showPromptPreview)}
+                    className="w-full flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Code2 className="w-4 h-4" />
+                      Промпт генерации
+                    </span>
+                    {showPromptPreview ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  </button>
+
+                  <AnimatePresence>
+                    {showPromptPreview && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden space-y-3"
+                      >
+                        {/* Russian */}
+                        <div className="rounded-2xl overflow-hidden border border-white/5">
+                          <div className="px-4 py-2 bg-blue-500/10 border-b border-white/5">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-blue-400">Русский</span>
+                          </div>
+                          <pre className="p-4 text-[10px] text-zinc-400 leading-relaxed whitespace-pre-wrap font-mono bg-zinc-950/50 max-h-52 overflow-y-auto">{baseImage
+? `ЗАДАЧА: ХИРУРГИЧЕСКАЯ ДОРАБОТКА
+ЦЕЛЬ: Изменить базовое изображение, используя исходного персонажа как фиксированный объект
+ПРАВИЛА:
+1. НУЛЕВОЕ ПЕРЕРИСОВЫВАНИЕ: лицо, волосы, глаза — 100% идентичны источнику
+2. ПИКСЕЛЬНОЕ СОВПАДЕНИЕ: точные силуэты, без новых конечностей и брони
+3. СТИЛЬ: яркая фэнтезийная цифровая живопись (Hearthstone)
+4. ИНТЕГРАЦИЯ: единое освещение, атмосфера, контактные тени
+5. ОСВЕЩЕНИЕ: один доминирующий источник, сильная подсветка контура
+6. ЦВЕТ: соответствие окружающему свету среды
+7. ЗАЗЕМЛЕНИЕ: реалистичные тени, соединённые с ногами
+8. ПРОМПТ: ${settings.prompt ? `ТОЛЬКО: ${settings.prompt}` : 'Улучшить интеграцию'}
+ИСКЛЮЧИТЬ: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}перерисовка, изменение лиц, мутации, лишние конечности, коллаж`
+: `ЗАДАЧА: МАСТЕР-КОМПОЗИТИНГ — СЛИЯНИЕ ПЕРСОНАЖЕЙ
+ПРАВИЛА:
+1. НУЛЕВОЕ ПЕРЕРИСОВЫВАНИЕ: персонажи — неизменяемые объекты
+2. ТОЧНОСТЬ: сохрани каждую деталь (броня, руны, волосы) в точности
+3. СТИЛЬ: яркая фэнтезийная цифровая живопись (Hearthstone)
+4. ОКРУЖЕНИЕ: создай НОВЫЙ фон, дополняющий освещение персонажей
+5. БЕЗ КОЛЛАЖА: единая, цельная, законченная сцена
+6. ОСВЕЩЕНИЕ: один доминирующий источник света
+7. ЗАЗЕМЛЕНИЕ: тени у ног, без парения${settings.prompt ? `\nПОЛЬЗОВАТЕЛЬ: ${settings.prompt}` : ''}
+ИСКЛЮЧИТЬ: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}перерисовка, изменение лиц, мутации, лишние конечности, коллаж`}</pre>
+                        </div>
+
+                        {/* English */}
+                        <div className="rounded-2xl overflow-hidden border border-white/5">
+                          <div className="px-4 py-2 bg-indigo-500/10 border-b border-white/5">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-indigo-400">English — API Prompt</span>
+                          </div>
+                          <pre className="p-4 text-[10px] text-zinc-400 leading-relaxed whitespace-pre-wrap font-mono bg-zinc-950/50 max-h-52 overflow-y-auto">{baseImage
+? `TASK: SURGICAL REFINEMENT.
+OBJECTIVE: Modify "BASE IMAGE" using "SOURCE CHARACTER" as FIXED ASSETS.
+RULES:
+1. ZERO REDRAWING: Faces, hair, eyes MUST be 100% identical to source.
+2. PIXEL-PERFECT: Exact silhouettes. No new limbs or armor.
+3. STYLE: VIBRANT FANTASY DIGITAL PAINTING (Hearthstone style).
+4. INTEGRATION: Unified lighting, atmosphere, contact shadows.
+5. LIGHTING: Single dominant light source. Strong rim lighting.
+6. COLOR: Match environment ambient light.
+7. GROUNDING: Realistic shadows connected to feet.
+8. PROMPT: ${settings.prompt ? `ONLY: ${settings.prompt}` : 'Improve integration.'}
+AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing, changing faces, mutation, extra limbs, collage, split-screen`
+: `TASK: MASTER COMPOSITING - FUSE CHARACTERS.
+RULES:
+1. ZERO REDRAWING: Use source characters as immutable assets.
+2. FIDELITY: Preserve every detail (armor, runes, hair) exactly.
+3. STYLE: VIBRANT FANTASY DIGITAL PAINTING (Hearthstone style).
+4. ENVIRONMENT: Generate NEW background complementing characters' lighting.
+5. NO COLLAGE: One seamless, unified scene.
+6. LIGHTING: One dominant light source matching characters.
+7. GROUNDING: Shadows connected to feet. No floating.${settings.prompt ? `\nUSER: ${settings.prompt}` : ''}
+AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing, changing faces, mutation, extra limbs, collage, split-screen`}</pre>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
           </section>
         </div>
 
         {/* Right Column: Results */}
-        <div className="lg:col-span-8 space-y-8">
-          <div className="bg-zinc-900/50 rounded-[3rem] border border-white/5 min-h-[700px] flex flex-col overflow-hidden shadow-sm relative">
-            <div className="p-10 flex-1 flex flex-col items-center justify-center relative">
-              <AnimatePresence mode="wait">
-                {isGenerating ? (
-                  <motion.div 
-                    key="loading"
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 1.1 }}
-                    className="flex flex-col items-center gap-8 text-center"
+        <div className="lg:col-span-8 space-y-6">
+          <AnimatePresence mode="wait">
+            {isGenerating ? (
+              <motion.div
+                key="loading"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 1.05 }}
+                className="bg-zinc-900/50 rounded-[3rem] border border-white/5 min-h-[600px] flex items-center justify-center shadow-sm"
+              >
+                <div className="flex flex-col items-center gap-8 text-center p-10">
+                  <div className="relative">
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                      className="w-32 h-32 border-4 border-indigo-500/10 border-t-indigo-500 rounded-full"
+                    />
+                    <Sparkles className="w-10 h-10 text-indigo-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+                  </div>
+                  <div className="space-y-3">
+                    <h3 className="text-3xl font-black tracking-tighter text-white">Создаем шедевр...</h3>
+                    <p className="text-zinc-500 text-lg max-w-sm">Анализируем цвета, объекты и композицию для вашей уникальной обложки.</p>
+                  </div>
+                </div>
+              </motion.div>
+            ) : results.length > 0 ? (
+              <motion.div
+                key="results"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="relative"
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {results.map((url, i) => (
+                    <ResultCard
+                      key={i}
+                      url={url}
+                      isLiked={likedSet.has(url)}
+                      onToggleLike={toggleLike}
+                      onUpscale={handleUpscale}
+                      onFullscreen={setFullscreenImage}
+                      onRefine={(url) => {
+                        setBaseImage({ data: url, mimeType: 'image/png' });
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                        setTimeout(() => promptRef.current?.focus(), 100);
+                      }}
+                      onDownload={(url) => {
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `cover-${i}.png`;
+                        link.click();
+                      }}
+                    />
+                  ))}
+                </div>
+
+                {isUpscaling && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="absolute inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-6 rounded-[2rem]"
                   >
                     <div className="relative">
-                      <motion.div 
+                      <motion.div
                         animate={{ rotate: 360 }}
                         transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                        className="w-32 h-32 border-4 border-indigo-500/10 border-t-indigo-500 rounded-full" 
+                        className="w-24 h-24 border-4 border-indigo-500/10 border-t-indigo-500 rounded-full"
                       />
-                      <Sparkles className="w-10 h-10 text-indigo-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+                      <Maximize2 className="w-8 h-8 text-indigo-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                     </div>
-                    <div className="space-y-3">
-                      <h3 className="text-3xl font-black tracking-tighter text-white">Создаем шедевр...</h3>
-                      <p className="text-zinc-500 text-lg max-w-sm">Анализируем цвета, объекты и композицию для вашей уникальной обложки.</p>
-                    </div>
-                  </motion.div>
-                ) : results.length > 0 ? (
-                  <motion.div 
-                    key="results"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="w-full h-full grid grid-cols-1 md:grid-cols-2 gap-8"
-                  >
-                    {results.map((url, i) => (
-                      <ResultCard 
-                        key={url} 
-                        url={url} 
-                        isLiked={likedSet.has(url)} 
-                        onToggleLike={toggleLike} 
-                        onUpscale={handleUpscale} 
-                        onFullscreen={setFullscreenImage} 
-                        onRefine={(url) => {
-                          setBaseImage({ data: url, mimeType: 'image/png' });
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                          setTimeout(() => promptRef.current?.focus(), 100);
-                        }}
-                        onDownload={(url) => {
-                          const link = document.createElement('a');
-                          link.href = url;
-                          link.download = `cover-${i}.png`;
-                          link.click();
-                        }}
-                      />
-                    ))}
-                  </motion.div>
-                ) : (
-                  <motion.div 
-                    key="empty"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="flex flex-col items-center gap-8 text-center"
-                  >
-                    <div className="w-24 h-24 bg-zinc-900 rounded-[2rem] flex items-center justify-center border border-white/5 shadow-inner">
-                      <ImageIcon className="w-12 h-12 text-zinc-800" />
-                    </div>
-                    <div className="space-y-3">
-                      <h3 className="text-3xl font-black tracking-tighter text-zinc-700">Готов к созданию</h3>
-                      <p className="text-zinc-500 text-lg max-w-xs">Загрузите 2-4 изображения и нажмите «Создать», чтобы увидеть магию.</p>
+                    <div className="text-center space-y-2">
+                      <h3 className="text-xl font-black text-white uppercase tracking-tighter">Улучшаем качество...</h3>
+                      <p className="text-zinc-400 text-sm">Масштабируем изображение до 4K с ИИ</p>
                     </div>
                   </motion.div>
                 )}
-              </AnimatePresence>
-
-              {isUpscaling && (
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="absolute inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-6"
-                >
-                  <div className="relative">
-                    <motion.div 
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                      className="w-24 h-24 border-4 border-indigo-500/10 border-t-indigo-500 rounded-full" 
-                    />
-                    <Maximize2 className="w-8 h-8 text-indigo-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+              </motion.div>
+            ) : (
+              <motion.div
+                key="empty"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="bg-zinc-900/50 rounded-[3rem] border border-white/5 min-h-[600px] flex items-center justify-center shadow-sm"
+              >
+                <div className="flex flex-col items-center gap-8 text-center p-10">
+                  <div className="w-24 h-24 bg-zinc-900 rounded-[2rem] flex items-center justify-center border border-white/5 shadow-inner">
+                    <ImageIcon className="w-12 h-12 text-zinc-800" />
                   </div>
-                  <div className="text-center space-y-2">
-                    <h3 className="text-xl font-black text-white uppercase tracking-tighter">Улучшаем качество...</h3>
-                    <p className="text-zinc-400 text-sm">Масштабируем изображение до 4K с ИИ</p>
+                  <div className="space-y-3">
+                    <h3 className="text-3xl font-black tracking-tighter text-zinc-700">Готов к созданию</h3>
+                    <p className="text-zinc-500 text-lg max-w-xs">Загрузите 2-4 изображения и нажмите «Создать», чтобы увидеть магию.</p>
                   </div>
-                </motion.div>
-              )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-              {error && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="absolute bottom-10 left-10 right-10 p-5 bg-red-500/10 border border-red-500/20 rounded-[2rem] text-red-500 text-sm flex items-center gap-4 shadow-sm"
-                >
-                  <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.5)]" />
-                  <span className="font-bold">{error}</span>
-                </motion.div>
-              )}
-            </div>
-          </div>
+          <AnimatePresence>
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                className="p-5 bg-red-500/10 border border-red-500/20 rounded-[2rem] text-red-500 text-sm flex items-center gap-4 shadow-sm"
+              >
+                <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.5)]" />
+                <span className="font-bold">{error}</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Tips */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
