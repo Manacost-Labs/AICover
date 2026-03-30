@@ -261,6 +261,15 @@ export async function fetchUrlAsImageSource(url: string): Promise<{ data: string
   return { data: base64, mimeType };
 }
 
+/** Normalize any app image URL to ImageSource for Gemini vision (data URL or http). */
+export async function imageUrlToImageSource(url: string): Promise<{ data: string; mimeType: string }> {
+  if (url.startsWith('data:')) {
+    const m = url.match(/^data:(image\/[^;]+);base64,/);
+    return { data: url, mimeType: m ? m[1] : 'image/png' };
+  }
+  return fetchUrlAsImageSource(url);
+}
+
 export async function deleteReferenceFromLibrary(id: string, storagePath: string): Promise<void> {
   if (!supabase) return;
   await supabase.storage.from('images').remove([storagePath]);
@@ -347,8 +356,9 @@ export async function loadFavorites(): Promise<string[]> {
   return (data || []).map(row => getPublicUrl(row.storage_path));
 }
 
-export async function addToFavorites(url: string): Promise<void> {
-  if (!supabase) return;
+/** Returns row id for follow-up updates (e.g. choice_analysis). */
+export async function addToFavorites(url: string): Promise<{ id: string } | null> {
+  if (!supabase) return null;
   try {
     const id = newId();
     let storagePath: string;
@@ -383,9 +393,34 @@ export async function addToFavorites(url: string): Promise<void> {
       }
     }
     await supabase.from('favorites').insert({ id, storage_path: storagePath, created_at: Date.now() });
+    return { id };
   } catch (e) {
     console.error('addToFavorites Supabase', e);
+    return null;
   }
+}
+
+export async function updateFavoriteChoiceAnalysis(id: string, choiceAnalysis: string): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase.from('favorites').update({ choice_analysis: choiceAnalysis }).eq('id', id);
+  if (error) console.error('updateFavoriteChoiceAnalysis', error);
+}
+
+/** Map public image URL → stored AI note (for merging into UI state). */
+export async function loadFavoriteChoiceNotesMap(): Promise<Record<string, string>> {
+  if (!supabase) return {};
+  const { data, error } = await supabase
+    .from('favorites')
+    .select('storage_path, choice_analysis')
+    .not('choice_analysis', 'is', null);
+  if (error || !data?.length) return {};
+  const out: Record<string, string> = {};
+  for (const row of data) {
+    if (row.choice_analysis && row.storage_path) {
+      out[getPublicUrl(row.storage_path)] = row.choice_analysis as string;
+    }
+  }
+  return out;
 }
 
 export async function removeFromFavorites(url: string): Promise<void> {

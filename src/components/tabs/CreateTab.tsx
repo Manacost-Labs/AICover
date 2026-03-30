@@ -12,6 +12,7 @@ import {
   Maximize2,
   AlertTriangle,
   LayoutGrid,
+  GripVertical,
 } from 'lucide-react';
 import type { SceneRole } from '../../services/geminiService';
 import { sceneRolesOrder } from '../../services/geminiService';
@@ -70,6 +71,26 @@ interface CreateTabProps {
 const sceneRoleLabel = (r: SceneRole) =>
   r === 'left' ? 'Лево' : r === 'center' ? 'Центр' : 'Право';
 
+const SCENE_DRAG_MIME = 'application/x-manacost-scene-role';
+
+function swapSceneSlotRoles(
+  prev: { id: string; role?: SceneRole }[],
+  from: SceneRole,
+  to: SceneRole
+) {
+  const a = prev.find(s => s.role === from);
+  if (!a) return prev;
+  const b = prev.find(s => s.role === to);
+  if (!b) {
+    return prev.map(s => (s.id === a.id ? { ...s, role: to } : s));
+  }
+  return prev.map(s => {
+    if (s.id === a.id) return { ...s, role: to };
+    if (s.id === b.id) return { ...s, role: from };
+    return s;
+  });
+}
+
 export const CreateTab: React.FC<CreateTabProps> = ({
   sources,
   setSources,
@@ -120,6 +141,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   const sceneFilled = sceneRoles.filter(r => sources.some((s: { role?: SceneRole }) => s.role === r)).length;
   const maxCover = 4;
   const maxScene = scenePlan;
+  const [sceneDragOverRole, setSceneDragOverRole] = React.useState<SceneRole | null>(null);
 
   return (
     <motion.div
@@ -246,12 +268,32 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   {sceneRoles.map(role => {
                     const src = sources.find((s: { role?: SceneRole }) => s.role === role);
                     const isFocused = focusedSceneSlot === role;
+                    const isDragOver = sceneDragOverRole === role;
+                    const onSceneSlotDragOver = (e: React.DragEvent) => {
+                      if (!Array.from(e.dataTransfer.types).includes(SCENE_DRAG_MIME)) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      e.dataTransfer.dropEffect = 'move';
+                      setSceneDragOverRole(role);
+                    };
+                    const onSceneSlotDrop = (e: React.DragEvent) => {
+                      if (!Array.from(e.dataTransfer.types).includes(SCENE_DRAG_MIME)) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSceneDragOverRole(null);
+                      const from = e.dataTransfer.getData(SCENE_DRAG_MIME) as SceneRole;
+                      if (!from || from === role) return;
+                      setSources((prev: any[]) => swapSceneSlotRoles(prev, from, role));
+                      onFocusedSceneSlotChange(role);
+                    };
                     return (
                       <div
                         key={role}
                         role="presentation"
                         onClick={() => onFocusedSceneSlotChange(role)}
-                        className={`flex flex-col gap-2 min-w-0 ${isFocused ? 'ring-2 ring-indigo-500/60 rounded-3xl p-1 -m-1' : ''}`}
+                        onDragOver={onSceneSlotDragOver}
+                        onDrop={onSceneSlotDrop}
+                        className={`flex flex-col gap-2 min-w-0 ${isFocused ? 'ring-2 ring-indigo-500/60 rounded-3xl p-1 -m-1' : ''} ${isDragOver ? 'ring-2 ring-amber-500/50 rounded-3xl' : ''}`}
                       >
                         <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500 text-center">
                           {sceneRoleLabel(role)}
@@ -259,13 +301,25 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                         {src ? (
                           <motion.div 
                             layoutId={src.id}
-                            className="relative group aspect-square rounded-3xl overflow-hidden bg-zinc-900 border border-white/5 shadow-sm cursor-pointer"
+                            draggable
+                            onDragStart={e => {
+                              e.dataTransfer.setData(SCENE_DRAG_MIME, role);
+                              e.dataTransfer.effectAllowed = 'move';
+                            }}
+                            onDragEnd={() => setSceneDragOverRole(null)}
+                            onDragOver={onSceneSlotDragOver}
+                            onDrop={onSceneSlotDrop}
+                            className="relative group aspect-square rounded-3xl overflow-hidden bg-zinc-900 border border-white/5 shadow-sm cursor-grab active:cursor-grabbing"
                             onClick={(e) => {
                               e.stopPropagation();
                               setFullscreenImage(src.data);
                             }}
+                            title="Перетащите в другой слот"
                           >
-                            <OptimizedImage src={src.data} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" priority />
+                            <OptimizedImage src={src.data} alt="" className="w-full h-full object-cover pointer-events-none" referrerPolicy="no-referrer" priority draggable={false} />
+                            <div className="absolute top-2 left-2 p-1 rounded-lg bg-zinc-950/70 text-zinc-400 border border-white/10 pointer-events-none">
+                              <GripVertical className="w-3.5 h-3.5" aria-hidden />
+                            </div>
                             <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
                               <button 
                                 type="button"
@@ -283,7 +337,9 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                               e.stopPropagation();
                               onRequestSourceUploadForSlot(role);
                             }}
-                            className="aspect-square rounded-3xl border-2 border-dashed border-white/10 hover:border-indigo-500/50 hover:bg-white/5 transition-all flex flex-col items-center justify-center gap-2 text-zinc-500 hover:text-indigo-400 group"
+                            onDragOver={onSceneSlotDragOver}
+                            onDrop={onSceneSlotDrop}
+                            className={`aspect-square rounded-3xl border-2 border-dashed border-white/10 hover:border-indigo-500/50 hover:bg-white/5 transition-all flex flex-col items-center justify-center gap-2 text-zinc-500 hover:text-indigo-400 group ${isDragOver ? 'border-amber-500/50 bg-amber-500/5' : ''}`}
                           >
                             <Plus className="w-6 h-6" />
                             <span className="text-[9px] font-black uppercase tracking-widest px-1">В слот</span>
@@ -297,7 +353,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
             </div>
             <p className="text-[10px] text-zinc-500 text-center uppercase tracking-[0.3em] font-black">
               {createLayoutMode === 'scene'
-                ? 'Клик по слоту — фокус; вставка и файлы идут в выбранный или первый пустой'
+                ? 'Клик — фокус; перетащите картинку между слотами; вставка и файлы — в выбранный или первый пустой'
                 : 'Перетащите сюда или Ctrl+V'}
             </p>
             <input 

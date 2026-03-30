@@ -19,6 +19,10 @@ ALTER TABLE public.reference_library ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reference_library
   ADD COLUMN IF NOT EXISTS vision_analysis text;
 
+-- Favorites: AI explanation why this variant was chosen vs batch siblings
+ALTER TABLE public.favorites
+  ADD COLUMN IF NOT EXISTS choice_analysis text;
+
 DROP POLICY IF EXISTS "anon_all_reference_library" ON public.reference_library;
 CREATE POLICY "anon_all_reference_library"
   ON public.reference_library

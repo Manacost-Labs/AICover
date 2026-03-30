@@ -27,6 +27,7 @@ import {
   upscaleImage,
   expandImage,
   analyzeReferenceCompositionVision,
+  analyzeFavoriteChoiceVision,
   sceneRolesOrder,
   type SceneRole,
 } from './services/geminiService';
@@ -36,6 +37,9 @@ import {
   loadReferenceLibrary, saveReferenceToLibrary, deleteReferenceFromLibrary, updateReferenceVisionAnalysis, fetchUrlAsImageSource,
   loadHistory, saveToHistory, clearHistory,
   loadFavorites, addToFavorites, removeFromFavorites,
+  updateFavoriteChoiceAnalysis,
+  loadFavoriteChoiceNotesMap,
+  imageUrlToImageSource,
   migrateFromIDB,
   type CardLibraryEntry,
   type ReferenceLibraryEntry,
@@ -167,6 +171,9 @@ function AppContent() {
   const sourcesRef = useRef<UISource[]>([]);
   
   const [likedImages, setLikedImages] = useState<string[]>([]);
+  /** URL → JSON/text from Gemini: why this favorite vs batch siblings */
+  const [favoriteChoiceNotes, setFavoriteChoiceNotes] = useState<Record<string, string>>({});
+  const [favoriteAnalysisLoadingUrl, setFavoriteAnalysisLoadingUrl] = useState<string | null>(null);
   
   // Memoized values for performance
   const likedSet = React.useMemo(() => new Set(likedImages), [likedImages]);
@@ -198,6 +205,20 @@ function AppContent() {
     prompt: ""
   });
   const [results, setResults] = useState<string[]>([]);
+
+  const resultsRef = useRef<string[]>([]);
+  const likedImagesRef = useRef<string[]>([]);
+  const settingsRef = useRef(settings);
+  useEffect(() => {
+    resultsRef.current = results;
+  }, [results]);
+  useEffect(() => {
+    likedImagesRef.current = likedImages;
+  }, [likedImages]);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
   const [history, setHistory] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isUpscaling, setIsUpscaling] = useState(false);
@@ -299,10 +320,28 @@ function AppContent() {
           else if (idbLiked) setLikedImages(idbLiked);
           setCardLibrary(sbLibrary);
           setReferenceLibrary(sbRefs);
+          try {
+            const [idbFavNotes, sbFavNotes] = await Promise.all([
+              get('fusion_favorite_choice_notes') as Promise<Record<string, string> | undefined>,
+              loadFavoriteChoiceNotesMap(),
+            ]);
+            setFavoriteChoiceNotes({
+              ...(idbFavNotes && typeof idbFavNotes === 'object' ? idbFavNotes : {}),
+              ...sbFavNotes,
+            });
+          } catch {
+            /* non-fatal */
+          }
         } else {
           // Fallback to IDB only
           if (idbHistory) setHistory(idbHistory);
           if (idbLiked) setLikedImages(idbLiked);
+          try {
+            const idbFavNotes = await get('fusion_favorite_choice_notes') as Record<string, string> | undefined;
+            if (idbFavNotes && typeof idbFavNotes === 'object') setFavoriteChoiceNotes(idbFavNotes);
+          } catch {
+            /* non-fatal */
+          }
         }
       } catch (e) {
         console.error("Failed to load data", e);
@@ -312,6 +351,12 @@ function AppContent() {
           const idbLiked = await get('fusion_liked');
           if (idbHistory) setHistory(idbHistory);
           if (idbLiked) setLikedImages(idbLiked);
+          try {
+            const idbFavNotes = await get('fusion_favorite_choice_notes') as Record<string, string> | undefined;
+            if (idbFavNotes && typeof idbFavNotes === 'object') setFavoriteChoiceNotes(idbFavNotes);
+          } catch {
+            /* non-fatal */
+          }
         } catch {}
       }
     };
@@ -692,23 +737,73 @@ function AppContent() {
     }
   };
 
-  const toggleLike = React.useCallback(async (url: string) => {
-    setLikedImages(prev => {
-      const isLiked = prev.includes(url);
-      const newLikes = isLiked ? prev.filter(item => item !== url) : [...prev, url];
-      // Save to IDB immediately
-      set('fusion_liked', newLikes).catch(e => console.error(e));
-      // Sync to Supabase in background
-      if (isSupabaseConfigured) {
-        if (isLiked) {
-          removeFromFavorites(url).catch(() => {});
-        } else {
-          addToFavorites(url).catch(() => {});
-        }
+  const runFavoriteChoiceAnalysis = React.useCallback(async (url: string, favoriteRowId: string | null) => {
+    setFavoriteAnalysisLoadingUrl(url);
+    try {
+      const chosen = await imageUrlToImageSource(url);
+      const batch = resultsRef.current;
+      const siblings = batch.filter(u => u !== url);
+      const alternatives: ImageSource[] = [];
+      for (const u of siblings.slice(0, 7)) {
+        alternatives.push(await imageUrlToImageSource(u));
       }
-      return newLikes;
-    });
+      const text = await analyzeFavoriteChoiceVision(chosen, alternatives, {
+        userPromptHint: settingsRef.current.prompt,
+      });
+      setFavoriteChoiceNotes(prev => ({ ...prev, [url]: text }));
+      const existing = (await get('fusion_favorite_choice_notes')) as Record<string, string> | undefined;
+      await set('fusion_favorite_choice_notes', {
+        ...(existing && typeof existing === 'object' ? existing : {}),
+        [url]: text,
+      });
+      if (favoriteRowId && isSupabaseConfigured) {
+        await updateFavoriteChoiceAnalysis(favoriteRowId, text);
+      }
+    } catch (e) {
+      console.error('runFavoriteChoiceAnalysis', e);
+    } finally {
+      setFavoriteAnalysisLoadingUrl(null);
+    }
   }, []);
+
+  const toggleLike = React.useCallback(
+    async (url: string) => {
+      const isLiked = likedImagesRef.current.includes(url);
+      if (isLiked) {
+        const newLikes = likedImagesRef.current.filter(item => item !== url);
+        setLikedImages(newLikes);
+        likedImagesRef.current = newLikes;
+        await set('fusion_liked', newLikes);
+        setFavoriteChoiceNotes(prev => {
+          const next = { ...prev };
+          delete next[url];
+          return next;
+        });
+        try {
+          const idbNotes = (await get('fusion_favorite_choice_notes')) as Record<string, string> | undefined;
+          if (idbNotes && typeof idbNotes === 'object' && idbNotes[url]) {
+            delete idbNotes[url];
+            await set('fusion_favorite_choice_notes', idbNotes);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+        if (isSupabaseConfigured) removeFromFavorites(url).catch(() => {});
+        return;
+      }
+      const newLikes = [...likedImagesRef.current, url];
+      setLikedImages(newLikes);
+      likedImagesRef.current = newLikes;
+      await set('fusion_liked', newLikes);
+      let favId: string | null = null;
+      if (isSupabaseConfigured) {
+        const res = await addToFavorites(url);
+        favId = res?.id ?? null;
+      }
+      void runFavoriteChoiceAnalysis(url, favId);
+    },
+    [runFavoriteChoiceAnalysis]
+  );
 
   const handleSaveCard = React.useCallback(async (name: string, cardId: string, imageData: string, mimeType: string) => {
     setIsSavingCard(true);
@@ -1425,6 +1520,8 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               likedImages={likedImages}
               likedSet={likedSet}
               toggleLike={toggleLike}
+              favoriteChoiceNotes={favoriteChoiceNotes}
+              favoriteAnalysisLoadingUrl={favoriteAnalysisLoadingUrl}
               handleUpscale={handleUpscale}
               setFullscreenImage={setFullscreenImage}
               onRefine={(url) => {

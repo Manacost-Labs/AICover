@@ -163,6 +163,74 @@ export async function analyzeReferenceCompositionVision(image: ImageSource): Pro
   }
 }
 
+const FAVORITE_CHOICE_VISION_PROMPT = `You are a vision analyst for a fantasy card-cover / character fusion pipeline.
+
+The user added ONE image to "favorites". It may be one of several parallel batch variants from the same generation (same prompt family). Images are provided in order: first = CHOSEN (favorite), then REJECTED alternatives (if any).
+
+Task:
+- Infer plausible, evidence-based reasons why a viewer might prefer the CHOSEN image over the alternatives.
+- Compare composition, depth (layering, overlaps), lighting unity, character readability (faces, silhouette), integration with background, artifact level, and overall "card cover" impact.
+- Use cautious wording: "likely", "may", "tends to" — you cannot know the user's true intent.
+- If there are NO alternative images, still analyze strengths of the chosen image (summary only).
+
+Output ONLY valid JSON (no markdown, no code fences). Shape:
+{
+  "summary_ru": "2-4 sentences in Russian",
+  "likely_reasons_ru": ["short bullet in Russian", "..."],
+  "vs_others_ru": "1-3 sentences comparing chosen vs rejected; empty string if no alternatives"
+}`;
+
+/**
+ * Explains likely reasons the user favored one variant over parallel batch alternatives (Gemini vision).
+ * Returns JSON text (or model text if parsing fails downstream).
+ */
+export async function analyzeFavoriteChoiceVision(
+  chosen: ImageSource,
+  alternatives: ImageSource[],
+  options?: { userPromptHint?: string }
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("API Key not found");
+  }
+  const ai = new GoogleGenAI({ apiKey });
+  const hint = options?.userPromptHint?.trim();
+  const parts: any[] = [
+    {
+      text:
+        FAVORITE_CHOICE_VISION_PROMPT +
+        (hint ? `\nOptional user prompt/theme hint (may be empty): ${hint}` : "") +
+        `\n\nOrder: image 1 = CHOSEN. Images 2+ = rejected batch variants (same count as provided).`,
+    },
+    { text: "CHOSEN (favorite):" },
+    {
+      inlineData: {
+        data: chosen.data.split(",")[1] || chosen.data,
+        mimeType: chosen.mimeType,
+      },
+    },
+  ];
+  alternatives.forEach((alt, idx) => {
+    parts.push({ text: `Rejected variant ${idx + 1}:` });
+    parts.push({
+      inlineData: {
+        data: alt.data.split(",")[1] || alt.data,
+        mimeType: alt.mimeType,
+      },
+    });
+  });
+  try {
+    const res = await ai.models.generateContent({
+      model: VISION_MODEL,
+      contents: { parts },
+    });
+    return (res.text || "").trim() || "{}";
+  } catch (e) {
+    console.error("analyzeFavoriteChoiceVision", e);
+    throw e;
+  }
+}
+
 /** Vision: lock-list per source — colors, light, must-preserve details (English, compact). */
 async function analyzeSourceCharactersForFusion(
   ai: GoogleGenAI,
