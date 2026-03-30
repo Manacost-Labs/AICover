@@ -216,9 +216,9 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
       </AnimatePresence>
 
       {referenceLibrary.length > 0 ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 items-start">
           {referenceLibrary.map(entry => (
-            <motion.div key={entry.id} layout className="group relative rounded-[1.5rem] overflow-hidden bg-zinc-900 border border-white/5">
+            <motion.div key={entry.id} layout className="group relative w-full rounded-[1.5rem] overflow-hidden bg-zinc-900 border border-white/5">
               <button type="button" className="w-full block" onClick={() => setFullscreenImage(entry.storageUrl)}>
                 <OptimizedImage src={entry.storageUrl} alt={entry.name} className="w-full h-auto object-cover aspect-video" referrerPolicy="no-referrer" />
                 {entry.visionAnalysis && (

@@ -7,9 +7,11 @@ import { findLibraryCardsInDeck } from '../services/hearthstoneService';
 
 interface DeckImportSectionProps {
   cardLibrary: CardLibraryEntry[];
-  sources: Array<{ id: string; data: string; mimeType: string }>;
+  sources: Array<{ id: string; data: string; mimeType: string; role?: string }>;
   onAddSource: (entry: CardLibraryEntry) => void;
   onRemoveSource: (entryId: string) => void;
+  createLayoutMode?: 'cover' | 'scene';
+  scenePlan?: 2 | 3;
 }
 
 export const DeckImportSection: React.FC<DeckImportSectionProps> = ({
@@ -17,7 +19,10 @@ export const DeckImportSection: React.FC<DeckImportSectionProps> = ({
   sources,
   onAddSource,
   onRemoveSource,
+  createLayoutMode = 'cover',
+  scenePlan = 3,
 }) => {
+  const maxSources = createLayoutMode === 'cover' ? 4 : scenePlan;
   const [isOpen, setIsOpen] = useState(false);
   const [deckstring, setDeckstring] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -49,7 +54,7 @@ export const DeckImportSection: React.FC<DeckImportSectionProps> = ({
     if (isSelected) {
       onRemoveSource(`lib_${entry.id}`);
     } else {
-      if (sources.length >= 4) return;
+      if (sources.length >= maxSources) return;
       onAddSource(entry);
     }
   };
@@ -141,20 +146,20 @@ export const DeckImportSection: React.FC<DeckImportSectionProps> = ({
                         Найдено {results.length} {results.length === 1 ? 'карта' : results.length < 5 ? 'карты' : 'карт'} из библиотеки
                       </p>
                       <p className="text-[10px] text-zinc-600">
-                        Нажмите чтобы добавить в источники ({sources.length}/4)
+                        Нажмите чтобы добавить в источники ({sources.length}/{maxSources})
                       </p>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-start">
                       {results.map(({ entry, count }) => {
                         const selected = isCardSelected(entry);
-                        const canAdd = sources.length < 4 || selected;
+                        const canAdd = sources.length < maxSources || selected;
                         return (
                           <motion.button
                             key={entry.id}
                             layout
                             onClick={() => canAdd && toggleCard(entry)}
                             disabled={!canAdd && !selected}
-                            className={`relative group rounded-2xl overflow-hidden border-2 transition-all text-left ${
+                            className={`relative group w-full rounded-2xl overflow-hidden border-2 transition-all text-left ${
                               selected
                                 ? 'border-indigo-500 shadow-lg shadow-indigo-500/20'
                                 : canAdd

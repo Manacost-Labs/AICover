@@ -20,7 +20,16 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { get, set } from 'idb-keyval';
-import { generateFusedCover, ImageSource, GenerationSettings, upscaleImage, expandImage, analyzeReferenceCompositionVision } from './services/geminiService';
+import {
+  generateFusedCover,
+  ImageSource,
+  GenerationSettings,
+  upscaleImage,
+  expandImage,
+  analyzeReferenceCompositionVision,
+  sceneRolesOrder,
+  type SceneRole,
+} from './services/geminiService';
 import {
   isSupabaseConfigured,
   loadCardLibrary, saveCardToLibrary, deleteCardFromLibrary,
@@ -124,6 +133,16 @@ interface UpscaleItem {
 
 interface UISource extends ImageSource {
   id: string;
+  role?: SceneRole;
+}
+
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onloadend = () => resolve(r.result as string);
+    r.onerror = () => reject(new Error('read failed'));
+    r.readAsDataURL(file);
+  });
 }
 
 function AppContent() {
@@ -131,6 +150,16 @@ function AppContent() {
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
   const [sources, setSources] = useState<UISource[]>([]);
+  const [createLayoutMode, setCreateLayoutMode] = useState<'cover' | 'scene'>('cover');
+  const [scenePlan, setScenePlan] = useState<2 | 3>(3);
+  const [focusedSceneSlot, setFocusedSceneSlot] = useState<SceneRole>('left');
+  const createLayoutModeRef = useRef<'cover' | 'scene'>('cover');
+  const scenePlanRef = useRef<2 | 3>(3);
+  const focusedSceneSlotRef = useRef<SceneRole>('left');
+  const pendingSourceSlotRef = useRef<SceneRole | null>(null);
+  createLayoutModeRef.current = createLayoutMode;
+  scenePlanRef.current = scenePlan;
+  focusedSceneSlotRef.current = focusedSceneSlot;
   const [upscaleSource, setUpscaleSource] = useState<ImageSource | null>(null);
   const [expandSource, setExpandSource] = useState<ImageSource | null>(null);
   const [upscaleResults, setUpscaleResults] = useState<UpscaleItem[]>([]);
@@ -338,10 +367,23 @@ function AppContent() {
         if (items[i].type.indexOf('image') !== -1) {
           const file = items[i].getAsFile();
           if (file) {
-            if (sourcesRef.current.length < 4) {
-              processFile(file, 'source');
+            const mode = createLayoutModeRef.current;
+            if (mode === 'cover') {
+              if (sourcesRef.current.length < 4) {
+                processFile(file, 'source');
+              } else {
+                processFile(file, 'reference');
+              }
             } else {
-              processFile(file, 'reference');
+              const plan = scenePlanRef.current;
+              const roles = sceneRolesOrder(plan);
+              const prev = sourcesRef.current;
+              const full = roles.every(r => prev.some(s => s.role === r));
+              if (full) {
+                processFile(file, 'source', focusedSceneSlotRef.current);
+              } else {
+                processFile(file, 'source');
+              }
             }
           }
         }
@@ -375,17 +417,36 @@ function AppContent() {
     }
   };
 
-  const processFile = (file: File, type: 'source' | 'reference') => {
+  const processFile = (file: File, type: 'source' | 'reference', sourceSlot?: SceneRole) => {
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64 = reader.result as string;
       if (type === 'source') {
-        setSources(prev => {
-          if (prev.length < 4) {
-            return [...prev, { id: Math.random().toString(36).substring(7), data: base64, mimeType: file.type }];
-          }
-          return prev;
-        });
+        if (createLayoutModeRef.current === 'cover') {
+          setSources(prev => {
+            if (prev.length < 4) {
+              return [...prev, { id: Math.random().toString(36).substring(7), data: base64, mimeType: file.type }];
+            }
+            return prev;
+          });
+        } else {
+          setSources(prev => {
+            const plan = scenePlanRef.current;
+            const roles = sceneRolesOrder(plan);
+            let slot = sourceSlot;
+            if (!slot || !roles.includes(slot)) {
+              slot = roles.find(r => !prev.some(s => s.role === r)) ?? focusedSceneSlotRef.current;
+            }
+            if (!slot || !roles.includes(slot)) return prev;
+            const newItem: UISource = {
+              id: Math.random().toString(36).substring(7),
+              data: base64,
+              mimeType: file.type,
+              role: slot,
+            };
+            return [...prev.filter(s => s.role !== slot), newItem];
+          });
+        }
       } else {
         setReference({ data: base64, mimeType: file.type });
         setReferenceVisionNotes(null);
@@ -397,9 +458,40 @@ function AppContent() {
     reader.readAsDataURL(file);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'source' | 'reference') => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>, type: 'source' | 'reference') => {
     const files = Array.from(e.target.files || []) as File[];
-    files.forEach(file => processFile(file, type));
+    e.target.value = '';
+    if (type === 'reference') {
+      if (files[0]) processFile(files[0], 'reference');
+      return;
+    }
+    if (createLayoutMode === 'cover') {
+      files.forEach(file => processFile(file, 'source'));
+      return;
+    }
+    const pending = pendingSourceSlotRef.current;
+    pendingSourceSlotRef.current = null;
+    const plan = scenePlanRef.current;
+    const roles = sceneRolesOrder(plan);
+    try {
+      const urls = await Promise.all(files.map(f => readFileAsDataURL(f)));
+      setSources(prev => {
+        let next = [...prev];
+        const startIdx = pending && roles.includes(pending) ? roles.indexOf(pending) : -1;
+        for (let i = 0; i < urls.length; i++) {
+          let role: SceneRole | undefined;
+          if (i === 0 && startIdx >= 0) role = roles[startIdx];
+          else role = roles.find(r => !next.some(s => s.role === r)) ?? focusedSceneSlotRef.current;
+          if (!role || !roles.includes(role)) break;
+          const mime = files[i].type;
+          const id = Math.random().toString(36).substring(7);
+          next = [...next.filter(s => s.role !== role), { id, data: urls[i], mimeType: mime, role }];
+        }
+        return next;
+      });
+    } catch {
+      setError("Не удалось прочитать файл. Пожалуйста, попробуйте снова.");
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -411,15 +503,32 @@ function AppContent() {
     setIsDragging(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const files = Array.from(e.dataTransfer.files) as File[];
-    files.forEach(file => {
-      if (file.type.startsWith('image/')) {
-        processFile(file, 'source');
+    const files = (Array.from(e.dataTransfer.files) as File[]).filter(f => f.type.startsWith('image/'));
+    if (files.length === 0) return;
+    if (createLayoutModeRef.current === 'scene' && files.length > 1) {
+      try {
+        const urls = await Promise.all(files.map(f => readFileAsDataURL(f)));
+        const plan = scenePlanRef.current;
+        const roles = sceneRolesOrder(plan);
+        setSources(prev => {
+          let next = [...prev];
+          for (let i = 0; i < urls.length; i++) {
+            const role = roles.find(r => !next.some(s => s.role === r)) ?? focusedSceneSlotRef.current;
+            if (!role || !roles.includes(role)) break;
+            const id = Math.random().toString(36).substring(7);
+            next = [...next.filter(s => s.role !== role), { id, data: urls[i], mimeType: files[i].type, role }];
+          }
+          return next;
+        });
+      } catch {
+        setError("Не удалось прочитать файл. Пожалуйста, попробуйте снова.");
       }
-    });
+      return;
+    }
+    files.forEach(file => processFile(file, 'source'));
   };
 
   const handleDragOverRef = (e: React.DragEvent) => {
@@ -541,14 +650,25 @@ function AppContent() {
   }, [expandSettings, history]);
 
   const handleGenerate = async () => {
-    if (sources.length < 2) {
+    const ordered =
+      createLayoutMode === 'scene'
+        ? sceneRolesOrder(scenePlan)
+            .map(r => sources.find(s => s.role === r))
+            .filter((x): x is UISource => x != null)
+        : sources;
+    if (createLayoutMode === 'scene') {
+      if (ordered.length !== scenePlan) {
+        setError('Заполните все слоты сцены для выбранного плана.');
+        return;
+      }
+    } else if (ordered.length < 2) {
       setError("Пожалуйста, загрузите хотя бы 2 изображения.");
       return;
     }
     setError(null);
     setIsGenerating(true);
     try {
-      const images = await generateFusedCover(sources, reference, settings, baseImage, likedImages, referenceVisionNotes);
+      const images = await generateFusedCover(ordered, reference, settings, baseImage, likedImages, referenceVisionNotes);
       setResults(images);
 
       const newHistory = [...images, ...history].slice(0, 50);
@@ -647,27 +767,87 @@ function AppContent() {
   }, []);
 
   const handleAddCardToSources = React.useCallback(async (entry: CardLibraryEntry) => {
-    if (sources.length >= 4) return;
-    // Fetch the image as base64 for Gemini API
+    if (createLayoutModeRef.current === 'cover') {
+      if (sourcesRef.current.length >= 4) return;
+    } else {
+      const plan = scenePlanRef.current;
+      const roles = sceneRolesOrder(plan);
+      const prev = sourcesRef.current;
+      const firstEmpty = roles.find(r => !prev.some(s => s.role === r));
+      const slot = firstEmpty ?? focusedSceneSlotRef.current;
+      if (!roles.includes(slot)) return;
+    }
     try {
       const response = await fetch(entry.storageUrl);
       const blob = await response.blob();
       const reader = new FileReader();
       reader.onloadend = () => {
-        setSources(prev => {
-          if (prev.length >= 4) return prev;
-          return [...prev, { id: `lib_${entry.id}`, data: reader.result as string, mimeType: blob.type }];
-        });
+        const data = reader.result as string;
+        const mime = blob.type;
+        if (createLayoutModeRef.current === 'cover') {
+          setSources(prev => {
+            if (prev.length >= 4) return prev;
+            return [...prev, { id: `lib_${entry.id}`, data, mimeType: mime }];
+          });
+        } else {
+          setSources(prev => {
+            const plan = scenePlanRef.current;
+            const roles = sceneRolesOrder(plan);
+            const firstEmpty = roles.find(r => !prev.some(s => s.role === r));
+            let slot = firstEmpty ?? focusedSceneSlotRef.current;
+            if (!roles.includes(slot)) return prev;
+            const newItem: UISource = { id: `lib_${entry.id}`, data, mimeType: mime, role: slot };
+            return [...prev.filter(s => s.role !== slot), newItem];
+          });
+        }
       };
       reader.readAsDataURL(blob);
     } catch (e) {
       console.error('Failed to load card art', e);
     }
-  }, [sources.length]);
+  }, []);
 
   const handleRemoveCardFromSources = React.useCallback((sourceId: string) => {
     setSources(prev => prev.filter(s => s.id !== sourceId));
   }, []);
+
+  const handleCreateLayoutModeChange = (mode: 'cover' | 'scene') => {
+    if (mode === createLayoutMode) return;
+    if (mode === 'scene') {
+      setSources(prev => {
+        const roles = sceneRolesOrder(scenePlan);
+        return prev.slice(0, roles.length).map((s, i) => ({ ...s, role: roles[i]! }));
+      });
+    } else {
+      setSources(prev => {
+        const order = sceneRolesOrder(scenePlan);
+        const sorted = order.map(r => prev.find(s => s.role === r)).filter((x): x is UISource => x != null);
+        return sorted.map(({ role: _r, ...rest }) => rest);
+      });
+    }
+    setCreateLayoutMode(mode);
+  };
+
+  const handleScenePlanChange = (plan: 2 | 3) => {
+    if (plan === scenePlan) return;
+    if (plan === 2) {
+      setSources(prev => prev.filter(s => s.role !== 'center'));
+      setFocusedSceneSlot(f => (f === 'center' ? 'left' : f));
+    }
+    setScenePlan(plan);
+  };
+
+  const requestSourceUploadForSlot = (slot: SceneRole) => {
+    pendingSourceSlotRef.current = slot;
+    setFocusedSceneSlot(slot);
+    sourceInputRef.current?.click();
+  };
+
+  const canRunFusion = React.useMemo(() => {
+    if (createLayoutMode === 'cover') return sources.length >= 2;
+    const roles = sceneRolesOrder(scenePlan);
+    return roles.every(r => sources.some(s => s.role === r));
+  }, [createLayoutMode, scenePlan, sources]);
 
   const updateReference = React.useCallback((r: ImageSource | null) => {
     setReference(r);
@@ -867,7 +1047,7 @@ function AppContent() {
             </button>
             <button 
               onClick={handleGenerate}
-              disabled={isGenerating || sources.length < 2}
+              disabled={isGenerating || !canRunFusion}
               className={`px-8 py-3 font-black rounded-full hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-xl uppercase tracking-tighter text-sm ${baseImage ? 'bg-indigo-600 text-white shadow-indigo-500/40' : 'bg-white text-zinc-950 shadow-white/20'}`}
             >
               {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
@@ -1173,6 +1353,13 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               key="create"
               sources={sources}
               setSources={setSources}
+              createLayoutMode={createLayoutMode}
+              onCreateLayoutModeChange={handleCreateLayoutModeChange}
+              scenePlan={scenePlan}
+              onScenePlanChange={handleScenePlanChange}
+              focusedSceneSlot={focusedSceneSlot}
+              onFocusedSceneSlotChange={setFocusedSceneSlot}
+              onRequestSourceUploadForSlot={requestSourceUploadForSlot}
               reference={reference}
               setReference={updateReference}
               settings={settings}

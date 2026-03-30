@@ -10,8 +10,11 @@ import {
   Sparkles,
   Loader2,
   Maximize2,
-  AlertTriangle
+  AlertTriangle,
+  LayoutGrid,
 } from 'lucide-react';
+import type { SceneRole } from '../../services/geminiService';
+import { sceneRolesOrder } from '../../services/geminiService';
 import { ResultCard } from '../ResultCard';
 import { DeckImportSection } from '../DeckImportSection';
 import { OptimizedImage } from '../OptimizedImage';
@@ -20,6 +23,13 @@ import type { CardLibraryEntry, ReferenceLibraryEntry } from '../../services/sup
 interface CreateTabProps {
   sources: any[];
   setSources: React.Dispatch<React.SetStateAction<any[]>>;
+  createLayoutMode: 'cover' | 'scene';
+  onCreateLayoutModeChange: (mode: 'cover' | 'scene') => void;
+  scenePlan: 2 | 3;
+  onScenePlanChange: (plan: 2 | 3) => void;
+  focusedSceneSlot: SceneRole;
+  onFocusedSceneSlotChange: (slot: SceneRole) => void;
+  onRequestSourceUploadForSlot: (slot: SceneRole) => void;
   reference: { data: string; mimeType: string } | null;
   setReference: (ref: { data: string; mimeType: string } | null) => void;
   settings: any;
@@ -57,9 +67,19 @@ interface CreateTabProps {
   onRemoveCardSource: (sourceId: string) => void;
 }
 
+const sceneRoleLabel = (r: SceneRole) =>
+  r === 'left' ? 'Лево' : r === 'center' ? 'Центр' : 'Право';
+
 export const CreateTab: React.FC<CreateTabProps> = ({
   sources,
   setSources,
+  createLayoutMode,
+  onCreateLayoutModeChange,
+  scenePlan,
+  onScenePlanChange,
+  focusedSceneSlot,
+  onFocusedSceneSlotChange,
+  onRequestSourceUploadForSlot,
   reference,
   setReference,
   settings,
@@ -96,6 +116,11 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   onAddCardSource,
   onRemoveCardSource,
 }) => {
+  const sceneRoles = sceneRolesOrder(scenePlan);
+  const sceneFilled = sceneRoles.filter(r => sources.some((s: { role?: SceneRole }) => s.role === r)).length;
+  const maxCover = 4;
+  const maxScene = scenePlan;
+
   return (
     <motion.div
       key="create"
@@ -108,10 +133,61 @@ export const CreateTab: React.FC<CreateTabProps> = ({
       <div className="lg:col-span-4 space-y-10">
           {/* Source Images */}
           <section className="space-y-6">
+            <div className="flex flex-col gap-4">
+              <div className="flex rounded-2xl bg-zinc-900/80 p-1 border border-white/5">
+                <button
+                  type="button"
+                  onClick={() => onCreateLayoutModeChange('cover')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                    createLayoutMode === 'cover' ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  <ImageIcon className="w-3.5 h-3.5" />
+                  Обложка
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onCreateLayoutModeChange('scene')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                    createLayoutMode === 'scene' ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  Сцена
+                </button>
+              </div>
+              {createLayoutMode === 'scene' && (
+                <div className="flex rounded-2xl bg-zinc-900/50 p-1 border border-white/5">
+                  <button
+                    type="button"
+                    onClick={() => onScenePlanChange(2)}
+                    className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                      scenePlan === 2 ? 'bg-indigo-600 text-white' : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    2 персонажа
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onScenePlanChange(3)}
+                    className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                      scenePlan === 3 ? 'bg-indigo-600 text-white' : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    3 персонажа
+                  </button>
+                </div>
+              )}
+            </div>
+
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-black uppercase tracking-[0.2em] text-zinc-500 flex items-center gap-2">
                 <ImageIcon className="w-4 h-4" />
-                Исходные изображения ({sources.length}/4)
+                {createLayoutMode === 'cover' ? (
+                  <>Исходные изображения ({sources.length}/{maxCover})</>
+                ) : (
+                  <>Сцена: {sceneFilled}/{maxScene}</>
+                )}
               </h2>
               {sources.length > 0 && (
                 <button 
@@ -128,46 +204,107 @@ export const CreateTab: React.FC<CreateTabProps> = ({
               onDrop={handleDrop}
               onPaste={(e) => handleLocalPaste(e, 'source')}
               tabIndex={0}
-              className={`grid grid-cols-2 gap-4 p-3 rounded-[2.5rem] transition-all bg-zinc-900/50 border-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${isDragging ? 'bg-indigo-500/10 border-indigo-500/50 scale-[1.02]' : 'border-white/5'}`}
+              className={`${
+                createLayoutMode === 'cover' ? 'grid grid-cols-2' : `grid gap-3 ${scenePlan === 2 ? 'grid-cols-2' : 'grid-cols-3'}`
+              } gap-4 p-3 rounded-[2.5rem] transition-all bg-zinc-900/50 border-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${isDragging ? 'bg-indigo-500/10 border-indigo-500/50 scale-[1.02]' : 'border-white/5'}`}
             >
-              {sources.map((src) => (
-                <motion.div 
-                  layoutId={src.id}
-                  key={src.id} 
-                  className="relative group aspect-square rounded-3xl overflow-hidden bg-zinc-900 border border-white/5 shadow-sm cursor-pointer"
-                  onClick={() => setFullscreenImage(src.data)}
-                >
-                  <OptimizedImage src={src.data} alt="Source" className="w-full h-full object-cover" referrerPolicy="no-referrer" priority />
-                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
-                    <button 
-                      onClick={() => setSources(prev => prev.filter(s => s.id !== src.id))}
-                      className="p-2 bg-red-500 text-white rounded-xl hover:scale-110 transition-transform shadow-md"
+              {createLayoutMode === 'cover' ? (
+                <>
+                  {sources.map((src: { id: string; data: string }) => (
+                    <motion.div 
+                      layoutId={src.id}
+                      key={src.id} 
+                      className="relative group aspect-square rounded-3xl overflow-hidden bg-zinc-900 border border-white/5 shadow-sm cursor-pointer"
+                      onClick={() => setFullscreenImage(src.data)}
                     >
-                      <X className="w-4 h-4" />
+                      <OptimizedImage src={src.data} alt="Source" className="w-full h-full object-cover" referrerPolicy="no-referrer" priority />
+                      <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                        <button 
+                          onClick={() => setSources((prev: any[]) => prev.filter(s => s.id !== src.id))}
+                          className="p-2 bg-red-500 text-white rounded-xl hover:scale-110 transition-transform shadow-md"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </motion.div>
+                  ))}
+                  {sources.length < maxCover && (
+                    <button 
+                      type="button"
+                      onClick={() => sourceInputRef.current?.click()}
+                      className="aspect-square rounded-3xl border-2 border-dashed border-white/10 hover:border-indigo-500/50 hover:bg-white/5 transition-all flex flex-col items-center justify-center gap-3 text-zinc-500 hover:text-indigo-400 group"
+                    >
+                      <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center group-hover:scale-110 transition-transform">
+                        <Plus className="w-6 h-6" />
+                      </div>
+                      <span className="text-[10px] font-black uppercase tracking-widest">Загрузить</span>
                     </button>
-                  </div>
-                </motion.div>
-              ))}
-              {sources.length < 4 && (
-                <button 
-                  onClick={() => sourceInputRef.current?.click()}
-                  className="aspect-square rounded-3xl border-2 border-dashed border-white/10 hover:border-indigo-500/50 hover:bg-white/5 transition-all flex flex-col items-center justify-center gap-3 text-zinc-500 hover:text-indigo-400 group"
-                >
-                  <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center group-hover:scale-110 transition-transform">
-                    <Plus className="w-6 h-6" />
-                  </div>
-                  <span className="text-[10px] font-black uppercase tracking-widest">Загрузить</span>
-                </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  {sceneRoles.map(role => {
+                    const src = sources.find((s: { role?: SceneRole }) => s.role === role);
+                    const isFocused = focusedSceneSlot === role;
+                    return (
+                      <div
+                        key={role}
+                        role="presentation"
+                        onClick={() => onFocusedSceneSlotChange(role)}
+                        className={`flex flex-col gap-2 min-w-0 ${isFocused ? 'ring-2 ring-indigo-500/60 rounded-3xl p-1 -m-1' : ''}`}
+                      >
+                        <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500 text-center">
+                          {sceneRoleLabel(role)}
+                        </span>
+                        {src ? (
+                          <motion.div 
+                            layoutId={src.id}
+                            className="relative group aspect-square rounded-3xl overflow-hidden bg-zinc-900 border border-white/5 shadow-sm cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setFullscreenImage(src.data);
+                            }}
+                          >
+                            <OptimizedImage src={src.data} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" priority />
+                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                              <button 
+                                type="button"
+                                onClick={() => setSources((prev: any[]) => prev.filter(s => s.id !== src.id))}
+                                className="p-2 bg-red-500 text-white rounded-xl hover:scale-110 transition-transform shadow-md"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </motion.div>
+                        ) : (
+                          <button 
+                            type="button"
+                            onClick={e => {
+                              e.stopPropagation();
+                              onRequestSourceUploadForSlot(role);
+                            }}
+                            className="aspect-square rounded-3xl border-2 border-dashed border-white/10 hover:border-indigo-500/50 hover:bg-white/5 transition-all flex flex-col items-center justify-center gap-2 text-zinc-500 hover:text-indigo-400 group"
+                          >
+                            <Plus className="w-6 h-6" />
+                            <span className="text-[9px] font-black uppercase tracking-widest px-1">В слот</span>
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </>
               )}
             </div>
             <p className="text-[10px] text-zinc-500 text-center uppercase tracking-[0.3em] font-black">
-              Перетащите сюда или Ctrl+V
+              {createLayoutMode === 'scene'
+                ? 'Клик по слоту — фокус; вставка и файлы идут в выбранный или первый пустой'
+                : 'Перетащите сюда или Ctrl+V'}
             </p>
             <input 
               type="file" 
               ref={sourceInputRef} 
               className="hidden" 
-              multiple 
+              multiple={createLayoutMode === 'cover'}
               accept="image/*" 
               onChange={(e) => handleFileChange(e, 'source')} 
             />
@@ -394,6 +531,8 @@ export const CreateTab: React.FC<CreateTabProps> = ({
             sources={sources}
             onAddSource={onAddCardSource}
             onRemoveSource={onRemoveCardSource}
+            createLayoutMode={createLayoutMode}
+            scenePlan={scenePlan}
           />
 
           <AnimatePresence mode="wait">

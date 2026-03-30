@@ -18,6 +18,61 @@ export interface ImageSource {
   mimeType: string;
 }
 
+/** Optional horizontal placement for scene-mode fusion (Create tab). */
+export type SceneRole = "left" | "center" | "right";
+
+export type FusionSource = ImageSource & { role?: SceneRole };
+
+export function sceneRolesOrder(plan: 2 | 3): SceneRole[] {
+  return plan === 2 ? ["left", "right"] : ["left", "center", "right"];
+}
+
+function fusionSourceLabel(src: FusionSource, indexZeroBased: number): string {
+  const r = src.role;
+  if (r === "left") {
+    return "SOURCE CHARACTER — LEFT (final frame: occupy the LEFT third or left half; anchor figure in left area) (USE THIS EXACTLY):";
+  }
+  if (r === "center") {
+    return "SOURCE CHARACTER — CENTER (final frame: occupy the CENTER third; anchor figure in middle) (USE THIS EXACTLY):";
+  }
+  if (r === "right") {
+    return "SOURCE CHARACTER — RIGHT (final frame: occupy the RIGHT third or right half; anchor figure in right area) (USE THIS EXACTLY):";
+  }
+  return `SOURCE CHARACTER ${indexZeroBased + 1} (USE THIS EXACTLY):`;
+}
+
+function fusionSourceVisionTag(src: FusionSource, indexZeroBased: number): string {
+  const r = src.role;
+  if (r === "left") return "SOURCE (LEFT — must appear on LEFT in output):";
+  if (r === "center") return "SOURCE (CENTER — must appear in CENTER in output):";
+  if (r === "right") return "SOURCE (RIGHT — must appear on RIGHT in output):";
+  return `SOURCE ${indexZeroBased + 1}:`;
+}
+
+function sceneLayoutBlock(sources: FusionSource[]): string {
+  const roles = sources.map((s) => s.role).filter(Boolean) as SceneRole[];
+  if (roles.length === 0) return "";
+  const hasAllThree = roles.includes("left") && roles.includes("center") && roles.includes("right");
+  const hasTwo = roles.includes("left") && roles.includes("right") && !roles.includes("center");
+  if (hasAllThree) {
+    return `
+    SCENE LAYOUT (mandatory — user-defined staging):
+    - Place the LEFT source character in the left third of the frame (foreground or midground as fits).
+    - Place the CENTER source character in the center third.
+    - Place the RIGHT source character in the right third.
+    - Maintain clear left-to-right reading order; do not swap which identity goes where.
+    - Single shared environment and unified lighting across all three.`;
+  }
+  if (hasTwo) {
+    return `
+    SCENE LAYOUT (mandatory — user-defined staging):
+    - Place the LEFT source character in the left half (or left third) of the frame.
+    - Place the RIGHT source character in the right half (or right third) of the frame.
+    - Do not place both on the same side. Single shared environment; unified lighting.`;
+  }
+  return "";
+}
+
 function extractJsonObject(text: string): Record<string, unknown> | null {
   const cleaned = text.replace(/```json\s*|```/gi, "").trim();
   const start = cleaned.indexOf("{");
@@ -111,7 +166,7 @@ export async function analyzeReferenceCompositionVision(image: ImageSource): Pro
 /** Vision: lock-list per source — colors, light, must-preserve details (English, compact). */
 async function analyzeSourceCharactersForFusion(
   ai: GoogleGenAI,
-  sources: ImageSource[]
+  sources: FusionSource[]
 ): Promise<string> {
   if (sources.length === 0) return "";
   const parts: any[] = [
@@ -125,7 +180,7 @@ Separate characters with a line "---". Max ~500 characters total.`,
     },
   ];
   sources.forEach((src, idx) => {
-    parts.push({ text: `SOURCE ${idx + 1}:` });
+    parts.push({ text: fusionSourceVisionTag(src, idx) });
     parts.push({
       inlineData: {
         data: src.data.split(",")[1] || src.data,
@@ -148,7 +203,7 @@ Separate characters with a line "---". Max ~500 characters total.`,
 /** Vision QA: compare OUTPUT to sources; request JSON. */
 async function visionCheckFusionOutput(
   ai: GoogleGenAI,
-  sources: ImageSource[],
+  sources: FusionSource[],
   outputDataUrl: string
 ): Promise<{ pass: boolean; issues: string[] }> {
   let output: ImageSource;
@@ -175,7 +230,7 @@ Set pass to false if any character is clearly redrawn or unrecognizable vs its S
     },
   ];
   sources.forEach((src, idx) => {
-    parts.push({ text: `SOURCE ${idx + 1}:` });
+    parts.push({ text: fusionSourceVisionTag(src, idx) });
     parts.push({
       inlineData: {
         data: src.data.split(",")[1] || src.data,
@@ -214,7 +269,7 @@ async function refineFusionAfterVision(
   ai: GoogleGenAI,
   model: string,
   settings: GenerationSettings,
-  sources: ImageSource[],
+  sources: FusionSource[],
   failedDataUrl: string,
   issues: string[],
   likedImages: string[]
@@ -223,7 +278,10 @@ async function refineFusionAfterVision(
   const parts: any[] = [];
 
   sources.forEach((src, idx) => {
-    parts.push({ text: `SOURCE CHARACTER ${idx + 1} (ABSOLUTE REFERENCE — DO NOT REDRAW OR REINTERPRET):` });
+    const head = src.role
+      ? `SOURCE CHARACTER — ${src.role.toUpperCase()} (ABSOLUTE REFERENCE — DO NOT REDRAW OR REINTERPRET):`
+      : `SOURCE CHARACTER ${idx + 1} (ABSOLUTE REFERENCE — DO NOT REDRAW OR REINTERPRET):`;
+    parts.push({ text: head });
     parts.push({
       inlineData: {
         data: src.data.split(",")[1] || src.data,
@@ -288,7 +346,7 @@ ${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}` : ""}`;
 }
 
 export async function generateFusedCover(
-  sources: ImageSource[],
+  sources: FusionSource[],
   reference: ImageSource | null,
   settings: GenerationSettings,
   baseImage: ImageSource | null = null,
@@ -346,6 +404,7 @@ export async function generateFusedCover(
     await Promise.all([refTask, briefTask]);
   }
 
+  const sceneLayout = !baseImage ? sceneLayoutBlock(sources) : "";
   const generatePromises: Promise<string[]>[] = [];
 
   // Since generateContent usually returns one image, we loop for batch size
@@ -354,7 +413,7 @@ export async function generateFusedCover(
 
     // Add source images with explicit labels
     sources.forEach((src, idx) => {
-      parts.push({ text: `SOURCE CHARACTER ${idx + 1} (USE THIS EXACTLY):` });
+      parts.push({ text: fusionSourceLabel(src, idx) });
       parts.push({
         inlineData: {
           data: src.data.split(",")[1] || src.data,
@@ -425,6 +484,7 @@ export async function generateFusedCover(
     ` : ""}
     ${settings.strictMode ? `
     STRICT MODE: If any conflict, prioritize exact match to SOURCE CHARACTER pixels over creativity.` : ""}
+    ${sceneLayout ? sceneLayout : ""}
     ${compositionDescription ? `LAYOUT (reference template — spatial only):
     - ${compositionDescription}
     - Do NOT copy template scenery, palette, or character designs from the template.

@@ -224,14 +224,14 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
 
       {/* Card grid */}
       {cardLibrary.length > 0 ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 items-start">
           {cardLibrary.map(entry => (
             <motion.div
               key={entry.id}
               layout
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="group relative rounded-[1.5rem] overflow-hidden bg-zinc-900 border border-white/5 shadow-md hover:shadow-indigo-500/10 transition-all cursor-pointer"
+              className="group relative w-full rounded-[1.5rem] overflow-hidden bg-zinc-900 border border-white/5 shadow-md hover:shadow-indigo-500/10 transition-all cursor-pointer"
               onClick={() => setFullscreenImage(entry.storageUrl)}
             >
               <OptimizedImage
