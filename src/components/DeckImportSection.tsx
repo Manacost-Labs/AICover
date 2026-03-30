@@ -23,15 +23,6 @@ export const DeckImportSection: React.FC<DeckImportSectionProps> = ({
   const [results, setResults] = useState<Array<{ entry: CardLibraryEntry; count: number }> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // IDs of library entries currently in sources
-  const selectedEntryIds = new Set(
-    sources.map(s => {
-      // Match source to library entry by data URL prefix
-      const lib = cardLibrary.find(e => s.data === e.storageUrl || s.id.startsWith('lib_'));
-      return lib?.id ?? s.id;
-    })
-  );
-
   const handleSearch = async () => {
     if (!deckstring.trim()) return;
     if (!cardLibrary.length) {
