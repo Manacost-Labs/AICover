@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Images, Plus, X, Trash2, Upload, Loader2, AlertTriangle } from 'lucide-react';
 import type { ReferenceLibraryEntry } from '../../services/supabaseService';
+import { OptimizedImage } from '../OptimizedImage';
 import { isSupabaseConfigured, formatSupabaseClientError } from '../../services/supabaseService';
 
 interface ReferencesTabProps {
@@ -134,7 +135,7 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
                 >
                   {formImage ? (
                     <>
-                      <img src={formImage.data} className="max-h-40 object-contain p-2" alt="" referrerPolicy="no-referrer" />
+                      <OptimizedImage src={formImage.data} className="max-h-40 object-contain p-2" alt="" referrerPolicy="no-referrer" priority />
                       <button type="button" onClick={ev => { ev.stopPropagation(); setFormImage(null); }} className="absolute top-2 right-2 p-1.5 bg-red-500 text-white rounded-full"><X className="w-3 h-3" /></button>
                     </>
                   ) : (
@@ -160,7 +161,7 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
           {referenceLibrary.map(entry => (
             <motion.div key={entry.id} layout className="group relative rounded-[1.5rem] overflow-hidden bg-zinc-900 border border-white/5">
               <button type="button" className="w-full block" onClick={() => setFullscreenImage(entry.storageUrl)}>
-                <img src={entry.storageUrl} alt={entry.name} className="w-full h-auto object-cover aspect-video" referrerPolicy="no-referrer" />
+                <OptimizedImage src={entry.storageUrl} alt={entry.name} className="w-full h-auto object-cover aspect-video" referrerPolicy="no-referrer" />
               </button>
               <div className="p-2 flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-white truncate">{entry.name}</span>

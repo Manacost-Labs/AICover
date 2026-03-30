@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { OptimizedImage } from './OptimizedImage';
 import { ChevronDown, ChevronUp, Layers, Search, Loader2, X, Check } from 'lucide-react';
 import type { CardLibraryEntry } from '../services/supabaseService';
 import { findLibraryCardsInDeck } from '../services/hearthstoneService';
@@ -161,7 +162,7 @@ export const DeckImportSection: React.FC<DeckImportSectionProps> = ({
                                 : 'border-white/5 opacity-40 cursor-not-allowed'
                             }`}
                           >
-                            <img
+                            <OptimizedImage
                               src={entry.storageUrl}
                               alt={entry.name}
                               className={`w-full h-auto block transition-transform duration-500 ${selected ? 'scale-105' : 'group-hover:scale-105'}`}

@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { OptimizedImage } from '../OptimizedImage';
 import { motion, AnimatePresence } from 'motion/react';
 import { BookOpen, Plus, X, Trash2, Upload, Loader2, AlertTriangle } from 'lucide-react';
 import type { CardLibraryEntry } from '../../services/supabaseService';
@@ -178,7 +179,7 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
                 >
                   {formImage ? (
                     <>
-                      <img src={formImage.data} className="w-full h-auto block max-h-48 object-contain p-2" referrerPolicy="no-referrer" />
+                      <OptimizedImage src={formImage.data} className="w-full h-auto block max-h-48 object-contain p-2" referrerPolicy="no-referrer" priority />
                       <button
                         onClick={e => { e.stopPropagation(); setFormImage(null); }}
                         className="absolute top-2 right-2 p-1.5 bg-red-500 text-white rounded-full hover:scale-110 transition-transform shadow"
@@ -233,7 +234,7 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
               className="group relative rounded-[1.5rem] overflow-hidden bg-zinc-900 border border-white/5 shadow-md hover:shadow-indigo-500/10 transition-all cursor-pointer"
               onClick={() => setFullscreenImage(entry.storageUrl)}
             >
-              <img
+              <OptimizedImage
                 src={entry.storageUrl}
                 alt={entry.name}
                 className="w-full h-auto block group-hover:scale-105 transition-transform duration-500"

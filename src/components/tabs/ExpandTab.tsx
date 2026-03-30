@@ -12,6 +12,7 @@ import {
   MoveHorizontal
 } from 'lucide-react';
 import { UpscaleResultCard } from '../UpscaleResultCard';
+import { OptimizedImage } from '../OptimizedImage';
 
 interface ExpandTabProps {
   expandSource: { data: string; mimeType: string } | null;
@@ -165,7 +166,7 @@ export const ExpandTab: React.FC<ExpandTabProps> = ({
         >
           {expandSource ? (
             <>
-              <img src={expandSource.data} className="absolute inset-0 w-full h-full object-contain p-4" referrerPolicy="no-referrer" />
+              <OptimizedImage src={expandSource.data} className="absolute inset-0 w-full h-full object-contain p-4" referrerPolicy="no-referrer" priority />
               <div className="absolute inset-0 bg-zinc-950/40 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center">
                 <button 
                   onClick={() => setExpandSource(null)}

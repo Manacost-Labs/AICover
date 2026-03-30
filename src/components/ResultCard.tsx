@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
+import { OptimizedImage } from './OptimizedImage';
 import { 
   Maximize2, 
   Heart, 
@@ -33,7 +34,7 @@ export const ResultCard: React.FC<ResultCardProps> = React.memo(({
       onClick={() => onFullscreen(url)}
       className="relative group rounded-[2rem] overflow-hidden bg-zinc-900 border border-white/5 shadow-xl hover:shadow-indigo-500/10 transition-all cursor-pointer"
     >
-      <img
+      <OptimizedImage
         src={url}
         alt="Generated Result"
         className="w-full h-auto block group-hover:scale-105 transition-transform duration-700"

@@ -38,7 +38,7 @@ import { HistoryTab } from './components/tabs/HistoryTab';
 import { FavoritesTab } from './components/tabs/FavoritesTab';
 import { LibraryTab } from './components/tabs/LibraryTab';
 import { ReferencesTab } from './components/tabs/ReferencesTab';
-import { REFERENCE_LIBRARY, ASPECT_RATIOS, RESOLUTIONS } from './constants';
+import { ASPECT_RATIOS, RESOLUTIONS } from './constants';
 
 // Error Boundary Component
 interface ErrorBoundaryProps {
@@ -1040,6 +1040,8 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
                 className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl"
                 onClick={(e) => e.stopPropagation()}
                 referrerPolicy="no-referrer"
+                decoding="async"
+                fetchPriority="high"
               />
 
               {/* Next */}
@@ -1165,7 +1167,6 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               handleDragLeaveRef={handleDragLeaveRef}
               handleDropRef={handleDropRef}
               selectFromLibrary={selectFromLibrary}
-              REFERENCE_LIBRARY={REFERENCE_LIBRARY}
               ASPECT_RATIOS={ASPECT_RATIOS}
               RESOLUTIONS={RESOLUTIONS}
               isDraggingRef={isDraggingRef}

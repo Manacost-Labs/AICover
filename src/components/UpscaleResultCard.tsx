@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
+import { OptimizedImage } from './OptimizedImage';
 import { 
   Maximize2, 
   Download, 
@@ -48,11 +49,12 @@ export const UpscaleResultCard: React.FC<UpscaleResultCardProps> = React.memo(({
           </div>
         ) : (
           <>
-            <img
+            <OptimizedImage
               src={item.upscaledUrl}
               className="w-full h-auto block cursor-pointer"
               onClick={() => onFullscreen(item.upscaledUrl!)}
               referrerPolicy="no-referrer"
+              priority
             />
             <div className="absolute top-4 right-4 px-3 py-1.5 bg-green-500 text-white rounded-full text-[10px] font-black flex items-center gap-2 shadow-lg shadow-green-500/20">
               <Check className="w-3 h-3" />
@@ -64,7 +66,7 @@ export const UpscaleResultCard: React.FC<UpscaleResultCardProps> = React.memo(({
       <div className="p-6 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center overflow-hidden border border-white/5">
-            <img src={item.originalUrl} className="w-full h-full object-cover opacity-50" referrerPolicy="no-referrer" />
+            <OptimizedImage src={item.originalUrl} className="w-full h-full object-cover opacity-50" referrerPolicy="no-referrer" />
           </div>
           <div>
             <div className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Оригинал</div>

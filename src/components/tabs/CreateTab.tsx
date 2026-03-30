@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
 import { DeckImportSection } from '../DeckImportSection';
+import { OptimizedImage } from '../OptimizedImage';
 import type { CardLibraryEntry, ReferenceLibraryEntry } from '../../services/supabaseService';
 
 interface CreateTabProps {
@@ -47,7 +48,6 @@ interface CreateTabProps {
   handleDragLeaveRef: () => void;
   handleDropRef: (e: React.DragEvent) => void;
   selectFromLibrary: (url: string) => Promise<void>;
-  REFERENCE_LIBRARY: any[];
   ASPECT_RATIOS: string[];
   RESOLUTIONS: string[];
   isDraggingRef: boolean;
@@ -88,7 +88,6 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   handleDragLeaveRef,
   handleDropRef,
   selectFromLibrary,
-  REFERENCE_LIBRARY,
   ASPECT_RATIOS,
   RESOLUTIONS,
   isDraggingRef,
@@ -138,7 +137,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   className="relative group aspect-square rounded-3xl overflow-hidden bg-zinc-900 border border-white/5 shadow-sm cursor-pointer"
                   onClick={() => setFullscreenImage(src.data)}
                 >
-                  <img src={src.data} alt="Source" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  <OptimizedImage src={src.data} alt="Source" className="w-full h-full object-cover" referrerPolicy="no-referrer" priority />
                   <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
                     <button 
                       onClick={() => setSources(prev => prev.filter(s => s.id !== src.id))}
@@ -193,7 +192,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   className="relative group aspect-video rounded-3xl overflow-hidden bg-zinc-900 border border-white/5 shadow-md cursor-pointer"
                   onClick={() => setFullscreenImage(reference.data)}
                 >
-                  <img src={reference.data} alt="Reference" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  <OptimizedImage src={reference.data} alt="Reference" className="w-full h-full object-cover" referrerPolicy="no-referrer" priority />
                   <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
                     <button 
                       onClick={() => setReference(null)}
@@ -204,47 +203,29 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-2">
                   {userReferenceLibrary.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600">Мои референсы</p>
-                      <div className="grid grid-cols-5 gap-3">
-                        {userReferenceLibrary.map((entry) => (
-                          <button
-                            key={entry.id}
-                            type="button"
-                            onClick={() => selectFromLibrary(entry.storageUrl)}
-                            className="aspect-square rounded-xl overflow-hidden border border-indigo-500/30 hover:border-indigo-500/60 transition-all group relative shadow-sm"
-                            title={entry.name}
-                          >
-                            <img src={entry.storageUrl} alt={entry.name} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600">Мои референсы</p>
                   )}
-                  <div className="space-y-2">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600">Пресеты</p>
-                    <div className="grid grid-cols-5 gap-3">
-                      {REFERENCE_LIBRARY.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => selectFromLibrary(item.url)}
-                          className="aspect-square rounded-xl overflow-hidden border border-white/5 hover:border-indigo-500/50 transition-all group relative shadow-sm"
-                          title={item.name}
-                        >
-                          <img src={item.url} alt={item.name} className="w-full h-full object-cover opacity-40 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
-                        </button>
-                      ))}
+                  <div className="grid grid-cols-5 gap-3">
+                    {userReferenceLibrary.map((entry) => (
                       <button
+                        key={entry.id}
                         type="button"
-                        onClick={() => refInputRef.current?.click()}
-                        className="aspect-square rounded-xl border border-dashed border-white/10 flex items-center justify-center text-zinc-500 hover:text-indigo-400 hover:border-indigo-500/50 bg-white/5"
+                        onClick={() => selectFromLibrary(entry.storageUrl)}
+                        className="aspect-square rounded-xl overflow-hidden border border-indigo-500/30 hover:border-indigo-500/60 transition-all group relative shadow-sm"
+                        title={entry.name}
                       >
-                        <Upload className="w-5 h-5" />
+                        <OptimizedImage src={entry.storageUrl} alt={entry.name} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
                       </button>
-                    </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => refInputRef.current?.click()}
+                      className="aspect-square rounded-xl border border-dashed border-white/10 flex items-center justify-center text-zinc-500 hover:text-indigo-400 hover:border-indigo-500/50 bg-white/5 self-stretch min-h-0"
+                    >
+                      <Upload className="w-5 h-5 shrink-0" />
+                    </button>
                   </div>
                 </div>
               )}
@@ -335,7 +316,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                     className="relative group aspect-video rounded-2xl overflow-hidden bg-zinc-900 border border-indigo-500/30 mb-3 shadow-md cursor-pointer"
                     onClick={() => setFullscreenImage(baseImage.data)}
                   >
-                    <img src={baseImage.data} alt="Base" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    <OptimizedImage src={baseImage.data} alt="Base" className="w-full h-full object-cover" referrerPolicy="no-referrer" priority />
                     <div className="absolute inset-0 bg-zinc-950/60 flex items-center justify-center pointer-events-none">
                       <span className="text-[10px] font-black uppercase tracking-widest text-indigo-400 bg-zinc-900/90 px-3 py-1.5 rounded-xl border border-indigo-500/20 shadow-sm">Доработка этого фото</span>
                     </div>
@@ -381,20 +362,22 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   />
                 </div>
 
-                <div className="flex items-center justify-between p-4 bg-zinc-900/50 rounded-2xl border border-white/5">
-                  <div className="space-y-1">
+                <div className="flex items-center justify-between gap-4 p-4 bg-zinc-900/50 rounded-2xl border border-white/5">
+                  <div className="space-y-1 min-w-0 flex-1">
                     <label className="text-[10px] font-black uppercase tracking-widest text-zinc-300">Максимальная точность</label>
                     <p className="text-[10px] text-zinc-500">
                       Анализ исходников (vision), жёсткий промпт и проверка результата; при провале — одна доработка (Nano Banana 2)
                     </p>
                   </div>
-                  <button 
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={settings.strictMode}
                     onClick={() => setSettings((s: any) => ({ ...s, strictMode: !s.strictMode }))}
-                    className={`w-12 h-6 rounded-full transition-all relative shadow-inner ${settings.strictMode ? 'bg-indigo-600' : 'bg-zinc-800'}`}
+                    className={`relative inline-flex h-8 w-[52px] shrink-0 cursor-pointer items-center rounded-full border border-white/10 p-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/60 ${settings.strictMode ? 'bg-indigo-600' : 'bg-zinc-700'}`}
                   >
-                    <motion.div 
-                      animate={{ x: settings.strictMode ? 24 : 4 }}
-                      className="absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm"
+                    <span
+                      className={`pointer-events-none block h-6 w-6 rounded-full bg-white shadow-md transition-transform duration-200 ease-out ${settings.strictMode ? 'translate-x-5' : 'translate-x-0'}`}
                     />
                   </button>
                 </div>

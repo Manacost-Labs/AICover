@@ -11,6 +11,7 @@ import {
   AlertTriangle 
 } from 'lucide-react';
 import { UpscaleResultCard } from '../UpscaleResultCard';
+import { OptimizedImage } from '../OptimizedImage';
 
 interface UpscaleTabProps {
   upscaleSource: { data: string; mimeType: string } | null;
@@ -157,7 +158,7 @@ export const UpscaleTab: React.FC<UpscaleTabProps> = ({
         >
           {upscaleSource ? (
             <>
-              <img src={upscaleSource.data} className="absolute inset-0 w-full h-full object-contain p-4" referrerPolicy="no-referrer" />
+              <OptimizedImage src={upscaleSource.data} className="absolute inset-0 w-full h-full object-contain p-4" referrerPolicy="no-referrer" priority />
               <div className="absolute inset-0 bg-zinc-950/40 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center">
                 <button 
                   onClick={() => setUpscaleSource(null)}
