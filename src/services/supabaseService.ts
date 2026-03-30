@@ -58,6 +58,9 @@ export function formatSupabaseClientError(err: unknown): string {
   if (/invalid compact jws|jwt|jws/i.test(raw)) {
     return 'Ключ anon public повреждён или обрезан: откройте Supabase → Project Settings → API, скопируйте ключ полностью (одна строка, начинается с eyJ…), в Vercel вставьте без кавычек и переносов строк, затем Redeploy.';
   }
+  if (/row-level security|rls/i.test(raw)) {
+    return 'Доступ к таблице заблокирован RLS: в Supabase → SQL Editor выполните скрипт supabase/rls-anon-policies.sql из репозитория (политики для роли anon на card_library, history, favorites и bucket images).';
+  }
   return raw;
 }
 
