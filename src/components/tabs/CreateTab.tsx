@@ -13,6 +13,8 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
+import { DeckImportSection } from '../DeckImportSection';
+import type { CardLibraryEntry } from '../../services/supabaseService';
 
 interface CreateTabProps {
   sources: any[];
@@ -49,6 +51,9 @@ interface CreateTabProps {
   ASPECT_RATIOS: string[];
   RESOLUTIONS: string[];
   isDraggingRef: boolean;
+  cardLibrary: CardLibraryEntry[];
+  onAddCardSource: (entry: CardLibraryEntry) => void;
+  onRemoveCardSource: (sourceId: string) => void;
 }
 
 export const CreateTab: React.FC<CreateTabProps> = ({
@@ -85,7 +90,10 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   REFERENCE_LIBRARY,
   ASPECT_RATIOS,
   RESOLUTIONS,
-  isDraggingRef
+  isDraggingRef,
+  cardLibrary,
+  onAddCardSource,
+  onRemoveCardSource,
 }) => {
   return (
     <motion.div
@@ -368,6 +376,14 @@ export const CreateTab: React.FC<CreateTabProps> = ({
 
         {/* Right Column: Results */}
         <div className="lg:col-span-8 space-y-6">
+          {/* Deck Import */}
+          <DeckImportSection
+            cardLibrary={cardLibrary}
+            sources={sources}
+            onAddSource={onAddCardSource}
+            onRemoveSource={onRemoveCardSource}
+          />
+
           <AnimatePresence mode="wait">
             {isGenerating ? (
               <motion.div

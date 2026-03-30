@@ -23,6 +23,8 @@ export default defineConfig(({mode}) => {
             'vendor-motion': ['motion'],
             'vendor-genai': ['@google/genai'],
             'vendor-ui': ['lucide-react', 'idb-keyval'],
+            'vendor-supabase': ['@supabase/supabase-js'],
+            'vendor-hs': ['deckstrings'],
           },
         },
       },

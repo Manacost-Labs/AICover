@@ -14,16 +14,26 @@ import {
   Loader2,
   ChevronRight,
   ChevronLeft,
-  Settings
+  Settings,
+  BookOpen
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { get, set } from 'idb-keyval';
 import { generateFusedCover, ImageSource, GenerationSettings, upscaleImage, expandImage } from './services/geminiService';
+import {
+  isSupabaseConfigured,
+  loadCardLibrary, saveCardToLibrary, deleteCardFromLibrary,
+  loadHistory, saveToHistory, clearHistory,
+  loadFavorites, addToFavorites, removeFromFavorites,
+  migrateFromIDB,
+  type CardLibraryEntry,
+} from './services/supabaseService';
 import { CreateTab } from './components/tabs/CreateTab';
 import { UpscaleTab } from './components/tabs/UpscaleTab';
 import { ExpandTab } from './components/tabs/ExpandTab';
 import { HistoryTab } from './components/tabs/HistoryTab';
 import { FavoritesTab } from './components/tabs/FavoritesTab';
+import { LibraryTab } from './components/tabs/LibraryTab';
 import { REFERENCE_LIBRARY, ASPECT_RATIOS, RESOLUTIONS } from './constants';
 
 // Error Boundary Component
@@ -113,7 +123,7 @@ interface UISource extends ImageSource {
 }
 
 function AppContent() {
-  const [activeTab, setActiveTab] = useState<'create' | 'history' | 'favorites' | 'upscale' | 'expand'>('create');
+  const [activeTab, setActiveTab] = useState<'create' | 'history' | 'favorites' | 'upscale' | 'expand' | 'library'>('create');
   const [sources, setSources] = useState<UISource[]>([]);
   const [upscaleSource, setUpscaleSource] = useState<ImageSource | null>(null);
   const [expandSource, setExpandSource] = useState<ImageSource | null>(null);
@@ -161,6 +171,8 @@ function AppContent() {
   const [hasKey, setHasKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [cardLibrary, setCardLibrary] = useState<CardLibraryEntry[]>([]);
+  const [isSavingCard, setIsSavingCard] = useState(false);
 
   // Lightbox gallery context — derive image list from current active tab
   const lightboxImages = React.useMemo(() => {
@@ -210,30 +222,51 @@ function AppContent() {
   useEffect(() => {
     const loadData = async () => {
       try {
+        // ── Legacy localStorage → IDB migration ──────────────────────────
         const localHistory = localStorage.getItem('fusion_history');
         const localLiked = localStorage.getItem('fusion_liked');
-
         let idbHistory = await get('fusion_history');
         let idbLiked = await get('fusion_liked');
-
-        let migrated = false;
         if (localHistory && !idbHistory) {
           idbHistory = JSON.parse(localHistory);
           await set('fusion_history', idbHistory);
           localStorage.removeItem('fusion_history');
-          migrated = true;
         }
         if (localLiked && !idbLiked) {
           idbLiked = JSON.parse(localLiked);
           await set('fusion_liked', idbLiked);
           localStorage.removeItem('fusion_liked');
-          migrated = true;
         }
 
-        if (idbHistory) setHistory(idbHistory);
-        if (idbLiked) setLikedImages(idbLiked);
+        // ── Load from Supabase (if configured) ───────────────────────────
+        if (isSupabaseConfigured) {
+          // Migrate IDB → Supabase on first run (non-blocking)
+          migrateFromIDB().catch(() => {});
+
+          const [sbHistory, sbLiked, sbLibrary] = await Promise.all([
+            loadHistory(),
+            loadFavorites(),
+            loadCardLibrary(),
+          ]);
+          if (sbHistory.length) setHistory(sbHistory);
+          else if (idbHistory) setHistory(idbHistory);
+          if (sbLiked.length) setLikedImages(sbLiked);
+          else if (idbLiked) setLikedImages(idbLiked);
+          setCardLibrary(sbLibrary);
+        } else {
+          // Fallback to IDB only
+          if (idbHistory) setHistory(idbHistory);
+          if (idbLiked) setLikedImages(idbLiked);
+        }
       } catch (e) {
         console.error("Failed to load data", e);
+        // Fallback to IDB
+        try {
+          const idbHistory = await get('fusion_history');
+          const idbLiked = await get('fusion_liked');
+          if (idbHistory) setHistory(idbHistory);
+          if (idbLiked) setLikedImages(idbLiked);
+        } catch {}
       }
     };
     loadData();
@@ -430,6 +463,7 @@ function AppContent() {
       const newHistory = [upscaledUrl, ...history].slice(0, 50);
       setHistory(newHistory);
       await set('fusion_history', newHistory);
+      if (isSupabaseConfigured) saveToHistory(upscaledUrl).catch(() => {});
     } catch (err: any) {
       console.error(err);
       const errorMessage = err.message || "Ошибка при апскейле";
@@ -471,6 +505,7 @@ function AppContent() {
       const newHistory = [expandedUrl, ...history].slice(0, 50);
       setHistory(newHistory);
       await set('fusion_history', newHistory);
+      if (isSupabaseConfigured) saveToHistory(expandedUrl).catch(() => {});
     } catch (err: any) {
       console.error(err);
       const errorMessage = err.message || "Ошибка при расширении";
@@ -493,10 +528,17 @@ function AppContent() {
     try {
       const images = await generateFusedCover(sources, reference, settings, baseImage, likedImages);
       setResults(images);
-      
+
       const newHistory = [...images, ...history].slice(0, 50);
       setHistory(newHistory);
+      // Save to IDB immediately (fast)
       await set('fusion_history', newHistory);
+      // Also save to Supabase in background (non-blocking)
+      if (isSupabaseConfigured) {
+        for (const img of images) {
+          saveToHistory(img).catch(() => {});
+        }
+      }
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Генерация не удалась. Пожалуйста, попробуйте снова.");
@@ -510,12 +552,58 @@ function AppContent() {
 
   const toggleLike = React.useCallback(async (url: string) => {
     setLikedImages(prev => {
-      const newLikes = prev.includes(url) 
-        ? prev.filter(item => item !== url)
-        : [...prev, url];
+      const isLiked = prev.includes(url);
+      const newLikes = isLiked ? prev.filter(item => item !== url) : [...prev, url];
+      // Save to IDB immediately
       set('fusion_liked', newLikes).catch(e => console.error(e));
+      // Sync to Supabase in background
+      if (isSupabaseConfigured) {
+        if (isLiked) {
+          removeFromFavorites(url).catch(() => {});
+        } else {
+          addToFavorites(url).catch(() => {});
+        }
+      }
       return newLikes;
     });
+  }, []);
+
+  const handleSaveCard = React.useCallback(async (name: string, cardId: string, imageData: string, mimeType: string) => {
+    setIsSavingCard(true);
+    try {
+      const entry = await saveCardToLibrary(name, cardId, imageData, mimeType);
+      setCardLibrary(prev => [entry, ...prev]);
+    } finally {
+      setIsSavingCard(false);
+    }
+  }, []);
+
+  const handleDeleteCard = React.useCallback(async (id: string, storagePath: string) => {
+    await deleteCardFromLibrary(id, storagePath);
+    setCardLibrary(prev => prev.filter(c => c.id !== id));
+  }, []);
+
+  const handleAddCardToSources = React.useCallback(async (entry: CardLibraryEntry) => {
+    if (sources.length >= 4) return;
+    // Fetch the image as base64 for Gemini API
+    try {
+      const response = await fetch(entry.storageUrl);
+      const blob = await response.blob();
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSources(prev => {
+          if (prev.length >= 4) return prev;
+          return [...prev, { id: `lib_${entry.id}`, data: reader.result as string, mimeType: blob.type }];
+        });
+      };
+      reader.readAsDataURL(blob);
+    } catch (e) {
+      console.error('Failed to load card art', e);
+    }
+  }, [sources.length]);
+
+  const handleRemoveCardFromSources = React.useCallback((sourceId: string) => {
+    setSources(prev => prev.filter(s => s.id !== sourceId));
   }, []);
 
   const selectFromLibrary = async (url: string) => {
@@ -679,7 +767,8 @@ function AppContent() {
               <div className="flex items-center gap-1">
                 {[
                   { id: 'history', label: 'История', icon: Layout },
-                  { id: 'favorites', label: 'Избранное', icon: ImageIcon }
+                  { id: 'favorites', label: 'Избранное', icon: ImageIcon },
+                  { id: 'library', label: 'Библиотека', icon: BookOpen },
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -1010,7 +1099,7 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               ASPECT_RATIOS={ASPECT_RATIOS}
             />
           ) : activeTab === 'create' ? (
-            <CreateTab 
+            <CreateTab
               key="create"
               sources={sources}
               setSources={setSources}
@@ -1046,12 +1135,22 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               ASPECT_RATIOS={ASPECT_RATIOS}
               RESOLUTIONS={RESOLUTIONS}
               isDraggingRef={isDraggingRef}
+              cardLibrary={cardLibrary}
+              onAddCardSource={handleAddCardToSources}
+              onRemoveCardSource={handleRemoveCardFromSources}
             />
           ) : activeTab === 'history' ? (
-            <HistoryTab 
+            <HistoryTab
               key="history"
               history={history}
-              setHistory={setHistory}
+              setHistory={async (newHistory) => {
+                if (typeof newHistory === 'function') {
+                  setHistory(newHistory);
+                } else {
+                  setHistory(newHistory);
+                  clearHistory().catch(() => {});
+                }
+              }}
               likedSet={likedSet}
               toggleLike={toggleLike}
               handleUpscale={handleUpscale}
@@ -1063,8 +1162,8 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
                 setTimeout(() => promptRef.current?.focus(), 100);
               }}
             />
-          ) : (
-            <FavoritesTab 
+          ) : activeTab === 'favorites' ? (
+            <FavoritesTab
               key="favorites"
               likedImages={likedImages}
               likedSet={likedSet}
@@ -1078,7 +1177,16 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
                 setTimeout(() => promptRef.current?.focus(), 100);
               }}
             />
-          )}
+          ) : activeTab === 'library' ? (
+            <LibraryTab
+              key="library"
+              cardLibrary={cardLibrary}
+              onSaveCard={handleSaveCard}
+              onDeleteCard={handleDeleteCard}
+              setFullscreenImage={setFullscreenImage}
+              isSaving={isSavingCard}
+            />
+          ) : null}
         </AnimatePresence>
       </main>
     </div>
