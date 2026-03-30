@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BookOpen, Plus, X, Trash2, Upload, Loader2, AlertTriangle } from 'lucide-react';
 import type { CardLibraryEntry } from '../../services/supabaseService';
-import { isSupabaseConfigured } from '../../services/supabaseService';
+import { isSupabaseConfigured, formatSupabaseClientError } from '../../services/supabaseService';
 
 interface LibraryTabProps {
   cardLibrary: CardLibraryEntry[];
@@ -46,8 +46,8 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
       setFormCardId('');
       setFormImage(null);
       setShowForm(false);
-    } catch (e: any) {
-      setSaveError(e.message || 'Ошибка сохранения');
+    } catch (e: unknown) {
+      setSaveError(formatSupabaseClientError(e) || 'Ошибка сохранения');
     }
   };
 

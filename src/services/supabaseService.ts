@@ -4,11 +4,40 @@ import { get, set, del } from 'idb-keyval';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
+/** Strip wrapping quotes often pasted by mistake from dashboards / docs. */
+function stripEnvQuotes(raw: string): string {
+  let s = raw.trim();
+  if (s.length >= 2 && ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))) {
+    s = s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+/** JWT must be one line; line breaks inside the key break "Compact JWS" parsing. */
+function normalizeAnonKey(raw: string): string {
+  return stripEnvQuotes(raw).replace(/\s+/g, '');
+}
+
+/** Supabase anon key is a JWT: header.payload.signature */
+function isLikelyJwt(key: string): boolean {
+  const parts = key.split('.');
+  return parts.length === 3 && parts.every(p => p.length > 0);
+}
+
 /** Never throw at module load — invalid env would otherwise blank-screen the whole app. */
 function createSupabaseSafe(): SupabaseClient | null {
-  const url = supabaseUrl?.trim();
-  const key = supabaseKey?.trim();
-  if (!url || !key || url === 'undefined' || key === 'undefined') return null;
+  const urlRaw = supabaseUrl?.trim();
+  const keyRaw = supabaseKey?.trim();
+  if (!urlRaw || !keyRaw || urlRaw === 'undefined' || keyRaw === 'undefined') return null;
+
+  const url = stripEnvQuotes(urlRaw);
+  const key = normalizeAnonKey(keyRaw);
+  if (!isLikelyJwt(key)) {
+    console.error(
+      'VITE_SUPABASE_ANON_KEY must be a full JWT (three dot-separated segments). Copy "anon public" from Supabase → Project Settings → API.'
+    );
+    return null;
+  }
   try {
     new URL(url);
     return createClient(url, key);
@@ -21,6 +50,15 @@ function createSupabaseSafe(): SupabaseClient | null {
 export const supabase = createSupabaseSafe();
 
 export const isSupabaseConfigured = !!supabase;
+
+/** User-facing text for PostgREST / auth errors (e.g. Invalid Compact JWS). */
+export function formatSupabaseClientError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (/invalid compact jws|jwt|jws/i.test(raw)) {
+    return 'Ключ anon public повреждён или обрезан: откройте Supabase → Project Settings → API, скопируйте ключ полностью (одна строка, начинается с eyJ…), в Vercel вставьте без кавычек и переносов строк, затем Redeploy.';
+  }
+  return raw;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
