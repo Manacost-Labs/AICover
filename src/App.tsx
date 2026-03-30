@@ -13,7 +13,6 @@ import {
   Maximize2,
   Loader2,
   ChevronRight,
-  ChevronLeft,
   Settings,
   BookOpen,
   Images
@@ -45,6 +44,7 @@ import {
   type ReferenceLibraryEntry,
 } from './services/supabaseService';
 import { ASPECT_RATIOS, RESOLUTIONS } from './constants';
+import { ImageLightbox } from './components/ImageLightbox';
 
 const CreateTab = React.lazy(() =>
   import('./components/tabs/CreateTab').then((m) => ({ default: m.CreateTab }))
@@ -1086,8 +1086,11 @@ function AppContent() {
         />
       </div>
 
-      {/* Header */}
-      <header className="border-b border-white/5 bg-zinc-950/80 backdrop-blur-2xl sticky top-0 z-50">
+      {/* Header — скрыт в полноэкранном просмотре изображения */}
+      <header
+        className={`border-b border-white/5 bg-zinc-950/80 backdrop-blur-2xl sticky top-0 z-50 ${fullscreenImage ? 'hidden' : ''}`}
+        aria-hidden={fullscreenImage ? true : undefined}
+      >
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
           <div className="flex items-center gap-10">
             <div
@@ -1336,80 +1339,6 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
       </AnimatePresence>
 
       <main className="max-w-7xl mx-auto p-6 relative z-10">
-        <AnimatePresence>
-          {fullscreenImage && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[100] bg-zinc-950/97 backdrop-blur-2xl flex items-center justify-center p-4"
-              onClick={() => setFullscreenImage(null)}
-            >
-              {/* Close */}
-              <button
-                onClick={() => setFullscreenImage(null)}
-                className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors z-10"
-              >
-                <X className="w-6 h-6" />
-              </button>
-
-              {/* Counter */}
-              {lightboxImages.length > 1 && (
-                <div className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-2 bg-white/10 backdrop-blur-sm rounded-full text-xs font-black text-white tracking-widest z-10">
-                  {lightboxIndex + 1} / {lightboxImages.length}
-                </div>
-              )}
-
-              {/* Prev */}
-              {lightboxIndex > 0 && (
-                <motion.button
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  onClick={(e) => { e.stopPropagation(); handleLightboxPrev(); }}
-                  className="absolute left-6 top-1/2 -translate-y-1/2 p-4 bg-white/10 hover:bg-white/20 text-white rounded-full transition-all hover:scale-110 z-10"
-                >
-                  <ChevronLeft className="w-7 h-7" />
-                </motion.button>
-              )}
-
-              {/* Image */}
-              <motion.img
-                key={fullscreenImage}
-                initial={{ opacity: 0, scale: 0.97 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.15 }}
-                src={fullscreenImage}
-                className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl"
-                onClick={(e) => e.stopPropagation()}
-                referrerPolicy="no-referrer"
-                decoding="async"
-                fetchPriority="high"
-              />
-
-              {/* Next */}
-              {lightboxIndex < lightboxImages.length - 1 && (
-                <motion.button
-                  initial={{ opacity: 0, x: 10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  onClick={(e) => { e.stopPropagation(); handleLightboxNext(); }}
-                  className="absolute right-6 top-1/2 -translate-y-1/2 p-4 bg-white/10 hover:bg-white/20 text-white rounded-full transition-all hover:scale-110 z-10"
-                >
-                  <ChevronRight className="w-7 h-7" />
-                </motion.button>
-              )}
-
-              {/* Keyboard hint */}
-              {lightboxImages.length > 1 && (
-                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 text-[10px] text-zinc-500 font-black uppercase tracking-widest">
-                  <span>← → навигация</span>
-                  <span>·</span>
-                  <span>ESC закрыть</span>
-                </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-
         <AnimatePresence mode="wait">
           {(isUpscaling && (activeTab === 'history' || activeTab === 'favorites')) && (
             <motion.div 
@@ -1595,6 +1524,22 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
           </Suspense>
         </AnimatePresence>
       </main>
+
+      <AnimatePresence>
+        {fullscreenImage && (
+          <React.Fragment key={fullscreenImage}>
+          <ImageLightbox
+            imageUrl={fullscreenImage}
+            onClose={() => setFullscreenImage(null)}
+            onPrev={lightboxIndex > 0 ? handleLightboxPrev : undefined}
+            onNext={lightboxIndex < lightboxImages.length - 1 ? handleLightboxNext : undefined}
+            showPrev={lightboxIndex > 0}
+            showNext={lightboxIndex < lightboxImages.length - 1}
+            counterLabel={lightboxImages.length > 1 ? `${lightboxIndex + 1} / ${lightboxImages.length}` : null}
+          />
+          </React.Fragment>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
