@@ -1,4 +1,7 @@
-import { GoogleGenAI, GenerateContentResponse, Modality } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
+
+/** Multimodal vision for composition / QA (not the image generator). */
+const VISION_MODEL = "gemini-3.1-flash-lite-preview";
 
 export interface GenerationSettings {
   model: string;
@@ -13,6 +16,203 @@ export interface GenerationSettings {
 export interface ImageSource {
   data: string; // base64
   mimeType: string;
+}
+
+function extractJsonObject(text: string): Record<string, unknown> | null {
+  const cleaned = text.replace(/```json\s*|```/gi, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end <= start) return null;
+  try {
+    return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function dataUrlToImageSource(dataUrl: string): ImageSource {
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
+  if (!match) throw new Error("Invalid data URL");
+  return { data: dataUrl, mimeType: match[1] };
+}
+
+/** Vision: lock-list per source — colors, light, must-preserve details (English, compact). */
+async function analyzeSourceCharactersForFusion(
+  ai: GoogleGenAI,
+  sources: ImageSource[]
+): Promise<string> {
+  if (sources.length === 0) return "";
+  const parts: any[] = [
+    {
+      text: `You help a compositing pipeline. For each SOURCE image in order, write 3–6 SHORT lines in English:
+- Dominant colors / materials (for color matching)
+- Light direction (where highlights fall)
+- Silhouette and costume details that must NOT be redrawn or "improved"
+
+Separate characters with a line "---". Max ~500 characters total.`,
+    },
+  ];
+  sources.forEach((src, idx) => {
+    parts.push({ text: `SOURCE ${idx + 1}:` });
+    parts.push({
+      inlineData: {
+        data: src.data.split(",")[1] || src.data,
+        mimeType: src.mimeType,
+      },
+    });
+  });
+  try {
+    const res = await ai.models.generateContent({
+      model: VISION_MODEL,
+      contents: { parts },
+    });
+    return (res.text || "").trim();
+  } catch (e) {
+    console.error("analyzeSourceCharactersForFusion", e);
+    return "";
+  }
+}
+
+/** Vision QA: compare OUTPUT to sources; request JSON. */
+async function visionCheckFusionOutput(
+  ai: GoogleGenAI,
+  sources: ImageSource[],
+  outputDataUrl: string
+): Promise<{ pass: boolean; issues: string[] }> {
+  let output: ImageSource;
+  try {
+    output = dataUrlToImageSource(outputDataUrl);
+  } catch {
+    return { pass: true, issues: [] };
+  }
+  const parts: any[] = [
+    {
+      text: `You are a strict QC reviewer for character compositing.
+
+You see SOURCE character images (in order) and one OUTPUT image that should combine them into ONE scene.
+
+Evaluate:
+1) IDENTITY: Do each character's face, skin, hair, and costume match the corresponding SOURCE (no different face, no redesigned outfit)?
+2) SCENE: Single coherent environment (not a collage / split lighting)?
+3) LIGHTING: Acceptable unified light on characters (minor grading OK; broken or contradictory light = fail)?
+
+Return ONLY valid JSON, no markdown:
+{"pass":true|false,"issues":["bullet in English",...]}
+
+Set pass to false if any character is clearly redrawn or unrecognizable vs its SOURCE, or the image is an obvious collage.`,
+    },
+  ];
+  sources.forEach((src, idx) => {
+    parts.push({ text: `SOURCE ${idx + 1}:` });
+    parts.push({
+      inlineData: {
+        data: src.data.split(",")[1] || src.data,
+        mimeType: src.mimeType,
+      },
+    });
+  });
+  parts.push({ text: "OUTPUT (candidate):" });
+  parts.push({
+    inlineData: {
+      data: output.data.split(",")[1] || output.data,
+      mimeType: output.mimeType,
+    },
+  });
+  try {
+    const res = await ai.models.generateContent({
+      model: VISION_MODEL,
+      contents: { parts },
+    });
+    const parsed = extractJsonObject(res.text || "");
+    if (!parsed) return { pass: true, issues: [] };
+    const pass = typeof parsed.pass === "boolean" ? parsed.pass : true;
+    const raw = parsed.issues;
+    const issues = Array.isArray(raw)
+      ? raw.filter((x): x is string => typeof x === "string")
+      : [];
+    return { pass, issues };
+  } catch (e) {
+    console.error("visionCheckFusionOutput", e);
+    return { pass: true, issues: [] };
+  }
+}
+
+/** One refinement pass: treat failed output as base; fix only QA issues. */
+async function refineFusionAfterVision(
+  ai: GoogleGenAI,
+  model: string,
+  settings: GenerationSettings,
+  sources: ImageSource[],
+  failedDataUrl: string,
+  issues: string[],
+  likedImages: string[]
+): Promise<string | null> {
+  const base = dataUrlToImageSource(failedDataUrl);
+  const parts: any[] = [];
+
+  sources.forEach((src, idx) => {
+    parts.push({ text: `SOURCE CHARACTER ${idx + 1} (ABSOLUTE REFERENCE — DO NOT REDRAW OR REINTERPRET):` });
+    parts.push({
+      inlineData: {
+        data: src.data.split(",")[1] || src.data,
+        mimeType: src.mimeType,
+      },
+    });
+  });
+
+  parts.push({ text: "BASE IMAGE (FAILED QA — SURGICAL FIX ONLY):" });
+  parts.push({
+    inlineData: {
+      data: base.data.split(",")[1] || base.data,
+      mimeType: base.mimeType,
+    },
+  });
+
+  if (likedImages.length > 0) {
+    parts.push({
+      text: "QUALITY BENCHMARKS (style only, not identity):",
+    });
+    for (const likedUrl of likedImages.slice(0, 2)) {
+      const match = likedUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
+      if (match) {
+        parts.push({
+          inlineData: { data: match[2], mimeType: match[1] },
+        });
+      }
+    }
+  }
+
+  const issueText = issues.length ? issues.join(" | ") : "unify scene and lighting";
+  const fixPrompt = `TASK: VISION QA REJECTED THIS OUTPUT.
+PROBLEMS REPORTED: ${issueText}
+
+RULES:
+1) ZERO REDRAWING: Faces, hair, eyes, armor, and props must match SOURCE CHARACTER images exactly — like texture projection, not repainting.
+2) Fix ONLY: environment continuity, global lighting harmony, contact shadows, color grading — without changing character designs.
+3) NO "improving" or beautifying faces. NO new poses for characters.
+4) Single coherent background; no collage seams.
+${settings.prompt ? `USER NOTE (secondary): ${settings.prompt}` : ""}
+${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}` : ""}`;
+
+  parts.push({ text: fixPrompt });
+
+  const imageConfig: any = { aspectRatio: settings.aspectRatio };
+  if (model === "gemini-3.1-flash-image-preview" || model === "gemini-3-pro-image-preview") {
+    imageConfig.imageSize = settings.imageSize;
+  }
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: { parts },
+    config: { imageConfig },
+  });
+
+  for (const part of response.candidates?.[0]?.content?.parts || []) {
+    if (part.inlineData) {
+      return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+    }
+  }
+  return null;
 }
 
 export async function generateFusedCover(
@@ -30,28 +230,41 @@ export async function generateFusedCover(
   const ai = new GoogleGenAI({ apiKey });
   const model = settings.model;
 
-  // 1. If reference exists, get a text description of its composition first
   let compositionDescription = "";
-  if (reference) {
-    try {
-      const descResponse = await ai.models.generateContent({
-        model: "gemini-3.1-flash-lite-preview",
-        contents: {
-          parts: [
-            { text: "Analyze this image as a COMPOSITION TEMPLATE. Identify the main subjects. For each, describe: 1. Position (left, right, center, foreground, background). 2. Pose and scale. 3. Environment perspective. DO NOT describe appearance, only spatial role." },
-            {
-              inlineData: {
-                data: reference.data.split(",")[1] || reference.data,
-                mimeType: reference.mimeType,
-              },
+  let sourceBrief = "";
+
+  if (!baseImage) {
+    const refTask = reference
+      ? ai.models
+          .generateContent({
+            model: VISION_MODEL,
+            contents: {
+              parts: [
+                {
+                  text: "Analyze this image as a COMPOSITION TEMPLATE. For each main subject: 1) Position (left/right/center, depth). 2) Pose and scale vs frame. 3) Camera / perspective. DO NOT describe colors or character appearance — spatial layout only.",
+                },
+                {
+                  inlineData: {
+                    data: reference.data.split(",")[1] || reference.data,
+                    mimeType: reference.mimeType,
+                  },
+                },
+              ],
             },
-          ],
-        },
-      });
-      compositionDescription = descResponse.text || "";
-    } catch (e) {
-      console.error("Failed to describe composition", e);
-    }
+          })
+          .then((r) => {
+            compositionDescription = r.text || "";
+          })
+          .catch((e) => {
+            console.error("Failed to describe composition", e);
+          })
+      : Promise.resolve();
+
+    const briefTask = analyzeSourceCharactersForFusion(ai, sources).then((b) => {
+      sourceBrief = b;
+    });
+
+    await Promise.all([refTask, briefTask]);
   }
 
   const generatePromises: Promise<string[]>[] = [];
@@ -117,26 +330,37 @@ export async function generateFusedCover(
          6. COLOR: Match environment ambient light.
          7. GROUNDING: Realistic shadows connected to feet.
          8. PROMPT: ${settings.prompt ? `ONLY: ${settings.prompt}` : "Improve integration."}`
-      : `TASK: MASTER COMPOSITING - FUSE CHARACTERS.
+      : `TASK: MASTER COMPOSITING — PHOTO-COMPOSITE, NOT RE-ILLUSTRATION.
+    The image model (Gemini 3.1 Flash Image) must treat SOURCE images as UNTOUCHABLE identity references.
     RULES:
-    1. ZERO REDRAWING: Use source characters as immutable assets.
-    2. FIDELITY: Preserve every detail (armor, runes, hair) exactly.
-    3. STYLE: VIBRANT FANTASY DIGITAL PAINTING.
-    4. ENVIRONMENT: Generate NEW background complementing characters' lighting.
-    5. NO COLLAGE: One seamless, unified scene.
-    6. LIGHTING: One dominant light source matching characters.
-    7. GROUNDING: Shadows connected to feet. No floating.
-    
-    ${compositionDescription ? `LAYOUT: 
-    - Position characters according to template: ${compositionDescription}
-    - DO NOT copy template scenery/colors.
-    - Match scale and framing.` : ""}`;
+    1. ZERO REDRAW / ZERO "IMPROVING": Do not repaint faces, skin, hair, eyes, or costumes. No beautification, no style drift.
+    2. COMPOSITE LIKE REAL PHOTO LAYERS: Only perspective warp, scale, blend edges, and relight onto ONE shared environment.
+    3. FIDELITY: Every emblem, armor plate, horn, and strand must match the corresponding SOURCE.
+    4. STYLE LOCK: Match the art style of the SOURCE card art (same brush feel); do not generic-paint new faces.
+    5. ENVIRONMENT: One new coherent background; light wraps BOTH characters consistently (no split-screen lighting).
+    6. NO COLLAGE: No visible seams, no duplicated horizons, no mismatched color grades left vs right.
+    7. GROUNDING: Contact shadows; feet on shared ground plane.
+    ${sourceBrief ? `
+    SOURCE_LOCK (VISION ANALYSIS — DO NOT VIOLATE):
+    ${sourceBrief}
+    ` : ""}
+    ${settings.strictMode ? `
+    STRICT MODE: If any conflict, prioritize exact match to SOURCE CHARACTER pixels over creativity.` : ""}
+    ${compositionDescription ? `LAYOUT (reference template — spatial only):
+    - ${compositionDescription}
+    - Do NOT copy template scenery, palette, or character designs from the template.
+    - Match scale and framing only.` : ""}`;
 
     const finalPrompt = `${fullPrompt}
     ${settings.prompt && !baseImage ? `USER: ${settings.prompt}` : ""}
     ${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}, redrawing, changing faces, mutation, extra limbs, collage, split-screen` : "AVOID: redrawing, changing faces, mutation, extra limbs, collage, split-screen"}`;
 
-    parts.push({ text: finalPrompt });
+    const batchVariation =
+      settings.batchSize > 1 && !baseImage
+        ? `\nBATCH_VARIANT (${i + 1} of ${settings.batchSize}): Parallel variant. Change ONLY: camera distance, framing, or background environment layout. Do NOT change character faces, outfits, colors, or lighting on the characters themselves—keep them visually identical to SOURCE CHARACTER images.`
+        : "";
+
+    parts.push({ text: finalPrompt + batchVariation });
 
     const imageConfig: any = {
       aspectRatio: settings.aspectRatio,
@@ -166,7 +390,24 @@ export async function generateFusedCover(
   }
 
   const resultsArrays = await Promise.all(generatePromises);
-  const results = resultsArrays.flat();
+  let results = resultsArrays.flat();
+
+  if (settings.strictMode && !baseImage && sources.length >= 2 && results.length > 0) {
+    results = await Promise.all(
+      results.map(async (url) => {
+        try {
+          const { pass, issues } = await visionCheckFusionOutput(ai, sources, url);
+          if (pass) return url;
+          const issueList = issues.length ? issues : ["Scene or identity coherence failed automated vision check"];
+          const refined = await refineFusionAfterVision(ai, model, settings, sources, url, issueList, likedImages);
+          return refined || url;
+        } catch (e) {
+          console.error("strictMode vision QA", e);
+          return url;
+        }
+      })
+    );
+  }
 
   return results;
 }

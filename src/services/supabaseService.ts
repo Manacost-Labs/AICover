@@ -59,12 +59,24 @@ export function formatSupabaseClientError(err: unknown): string {
     return 'Ключ anon public повреждён или обрезан: откройте Supabase → Project Settings → API, скопируйте ключ полностью (одна строка, начинается с eyJ…), в Vercel вставьте без кавычек и переносов строк, затем Redeploy.';
   }
   if (/row-level security|rls/i.test(raw)) {
-    return 'Доступ к таблице заблокирован RLS: в Supabase → SQL Editor выполните скрипт supabase/rls-anon-policies.sql из репозитория (политики для роли anon на card_library, history, favorites и bucket images).';
+    return 'Доступ к таблице заблокирован RLS: в Supabase → SQL Editor выполните скрипт supabase/rls-anon-policies.sql из репозитория (политики для роли anon на card_library, reference_library, history, favorites и bucket images).';
+  }
+  if (/storage|bucket|object|upload|policy/i.test(raw) && /violat|denied|forbidden|403|unauthor/i.test(raw)) {
+    return 'Ошибка Storage: проверьте bucket images и политики в supabase/rls-anon-policies.sql (раздел Storage).';
   }
   return raw;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface ReferenceLibraryEntry {
+  id: string;
+  name: string;
+  storageUrl: string;
+  storagePath: string;
+  mimeType: string;
+  addedAt: number;
+}
 
 export interface CardLibraryEntry {
   id: string;
@@ -170,6 +182,56 @@ export async function deleteCardFromLibrary(id: string, storagePath: string): Pr
   await supabase.storage.from('images').remove([storagePath]);
   await supabase.from('card_library').delete().eq('id', id);
 }
+// ─── Reference library ───────────────────────────────────────────────────────
+
+export async function loadReferenceLibrary(): Promise<ReferenceLibraryEntry[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('reference_library')
+    .select('*')
+    .order('added_at', { ascending: false });
+  if (error) {
+    console.error('loadReferenceLibrary', error);
+    return [];
+  }
+  return (data || []).map(row => ({
+    id: row.id,
+    name: row.name,
+    storagePath: row.storage_path,
+    storageUrl: getPublicUrl(row.storage_path),
+    mimeType: row.mime_type,
+    addedAt: row.added_at,
+  }));
+}
+
+export async function saveReferenceToLibrary(
+  name: string,
+  imageData: string,
+  mimeType: string
+): Promise<ReferenceLibraryEntry> {
+  if (!supabase) throw new Error('Supabase not configured');
+  const id = newId();
+  const ext = mimeType.split('/')[1]?.split('+')[0] || 'png';
+  const storagePath = `references/${id}.${ext}`;
+  const blob = base64ToBytes(imageData, mimeType);
+  const storageUrl = await uploadBlob(blob, storagePath);
+  const { error } = await supabase.from('reference_library').insert({
+    id,
+    name,
+    storage_path: storagePath,
+    mime_type: mimeType,
+    added_at: Date.now(),
+  });
+  if (error) throw error;
+  return { id, name, storageUrl, storagePath, mimeType, addedAt: Date.now() };
+}
+
+export async function deleteReferenceFromLibrary(id: string, storagePath: string): Promise<void> {
+  if (!supabase) return;
+  await supabase.storage.from('images').remove([storagePath]);
+  await supabase.from('reference_library').delete().eq('id', id);
+}
+
 
 // ─── History ─────────────────────────────────────────────────────────────────
 
@@ -187,20 +249,35 @@ export async function loadHistory(): Promise<string[]> {
   return (data || []).map(row => getPublicUrl(row.storage_path));
 }
 
-export async function saveToHistory(imageBase64: string, mimeType = 'image/png'): Promise<void> {
-  // Always save to IDB for fast in-session access
+export async function saveToHistory(imageInput: string, mimeType = 'image/png'): Promise<void> {
+  let dataUrl = imageInput;
+  let mt = mimeType;
+  try {
+    if (imageInput.startsWith('http://') || imageInput.startsWith('https://')) {
+      const conv = await urlToBase64(imageInput);
+      dataUrl = conv.base64;
+      mt = conv.mimeType || mimeType;
+    } else if (!imageInput.startsWith('data:')) {
+      console.warn('saveToHistory: expected data URL or http(s) URL, skipping');
+      return;
+    }
+  } catch (e) {
+    console.error('saveToHistory: could not resolve image', e);
+    return;
+  }
+
   try {
     const existing: string[] = (await get('fusion_history')) || [];
-    const updated = [imageBase64, ...existing].slice(0, 50);
+    const updated = [dataUrl, ...existing].slice(0, 50);
     await set('fusion_history', updated);
   } catch {}
 
   if (!supabase) return;
   try {
     const id = newId();
-    const ext = mimeType.split('/')[1]?.split('+')[0] || 'png';
+    const ext = mt.split('/')[1]?.split('+')[0] || 'png';
     const storagePath = `history/${id}.${ext}`;
-    const blob = base64ToBytes(imageBase64, mimeType);
+    const blob = base64ToBytes(dataUrl, mt);
     await uploadBlob(blob, storagePath);
     await supabase.from('history').insert({ id, storage_path: storagePath, created_at: Date.now() });
   } catch (e) {
@@ -314,8 +391,9 @@ export async function migrateFromIDB(): Promise<void> {
 
     console.log('Migrating IDB data to Supabase...');
     if (idbHistory?.length) {
-      for (const base64 of idbHistory.slice(0, 20)) { // limit to 20 to avoid timeouts
-        await saveToHistory(base64).catch(() => {});
+      for (const item of idbHistory.slice(0, 50)) {
+        await saveToHistory(item).catch(() => {});
+        await new Promise(r => setTimeout(r, 0));
       }
     }
     if (idbLiked?.length) {

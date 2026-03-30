@@ -15,7 +15,8 @@ import {
   ChevronRight,
   ChevronLeft,
   Settings,
-  BookOpen
+  BookOpen,
+  Images
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { get, set } from 'idb-keyval';
@@ -23,10 +24,12 @@ import { generateFusedCover, ImageSource, GenerationSettings, upscaleImage, expa
 import {
   isSupabaseConfigured,
   loadCardLibrary, saveCardToLibrary, deleteCardFromLibrary,
+  loadReferenceLibrary, saveReferenceToLibrary, deleteReferenceFromLibrary,
   loadHistory, saveToHistory, clearHistory,
   loadFavorites, addToFavorites, removeFromFavorites,
   migrateFromIDB,
   type CardLibraryEntry,
+  type ReferenceLibraryEntry,
 } from './services/supabaseService';
 import { CreateTab } from './components/tabs/CreateTab';
 import { UpscaleTab } from './components/tabs/UpscaleTab';
@@ -34,6 +37,7 @@ import { ExpandTab } from './components/tabs/ExpandTab';
 import { HistoryTab } from './components/tabs/HistoryTab';
 import { FavoritesTab } from './components/tabs/FavoritesTab';
 import { LibraryTab } from './components/tabs/LibraryTab';
+import { ReferencesTab } from './components/tabs/ReferencesTab';
 import { REFERENCE_LIBRARY, ASPECT_RATIOS, RESOLUTIONS } from './constants';
 
 // Error Boundary Component
@@ -123,7 +127,7 @@ interface UISource extends ImageSource {
 }
 
 function AppContent() {
-  const [activeTab, setActiveTab] = useState<'create' | 'history' | 'favorites' | 'upscale' | 'expand' | 'library'>('create');
+  const [activeTab, setActiveTab] = useState<'create' | 'history' | 'favorites' | 'upscale' | 'expand' | 'library' | 'references'>('create');
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
   const [sources, setSources] = useState<UISource[]>([]);
@@ -174,7 +178,9 @@ function AppContent() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [cardLibrary, setCardLibrary] = useState<CardLibraryEntry[]>([]);
+  const [referenceLibrary, setReferenceLibrary] = useState<ReferenceLibraryEntry[]>([]);
   const [isSavingCard, setIsSavingCard] = useState(false);
+  const [isSavingReference, setIsSavingReference] = useState(false);
 
   // Lightbox gallery context — derive image list from current active tab
   const lightboxImages = React.useMemo(() => {
@@ -182,8 +188,9 @@ function AppContent() {
     if (activeTab === 'create') return results;
     if (activeTab === 'history') return history;
     if (activeTab === 'favorites') return likedImages;
+    if (activeTab === 'references') return referenceLibrary.map((e) => e.storageUrl);
     return [fullscreenImage];
-  }, [fullscreenImage, activeTab, results, history, likedImages]);
+  }, [fullscreenImage, activeTab, results, history, likedImages, referenceLibrary]);
 
   const lightboxIndex = fullscreenImage ? lightboxImages.indexOf(fullscreenImage) : -1;
 
@@ -242,19 +249,24 @@ function AppContent() {
 
         // ── Load from Supabase (if configured) ───────────────────────────
         if (isSupabaseConfigured) {
-          // Migrate IDB → Supabase on first run (non-blocking)
-          migrateFromIDB().catch(() => {});
+          try {
+            await migrateFromIDB();
+          } catch {
+            /* non-fatal */
+          }
 
-          const [sbHistory, sbLiked, sbLibrary] = await Promise.all([
+          const [sbHistory, sbLiked, sbLibrary, sbRefs] = await Promise.all([
             loadHistory(),
             loadFavorites(),
             loadCardLibrary(),
+            loadReferenceLibrary(),
           ]);
           if (sbHistory.length) setHistory(sbHistory);
           else if (idbHistory) setHistory(idbHistory);
           if (sbLiked.length) setLikedImages(sbLiked);
           else if (idbLiked) setLikedImages(idbLiked);
           setCardLibrary(sbLibrary);
+          setReferenceLibrary(sbRefs);
         } else {
           // Fallback to IDB only
           if (idbHistory) setHistory(idbHistory);
@@ -313,7 +325,9 @@ function AppContent() {
       if (activeTabRef.current !== 'create') return;
       // Skip if target is an input or textarea
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      
+      if (e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLElement && e.target.isContentEditable) return;
+
       const items = e.clipboardData?.items;
       if (!items) return;
 
@@ -587,6 +601,21 @@ function AppContent() {
     setCardLibrary(prev => prev.filter(c => c.id !== id));
   }, []);
 
+  const handleSaveReference = React.useCallback(async (name: string, imageData: string, mimeType: string) => {
+    setIsSavingReference(true);
+    try {
+      const entry = await saveReferenceToLibrary(name, imageData, mimeType);
+      setReferenceLibrary((prev) => [entry, ...prev]);
+    } finally {
+      setIsSavingReference(false);
+    }
+  }, []);
+
+  const handleDeleteReference = React.useCallback(async (id: string, storagePath: string) => {
+    await deleteReferenceFromLibrary(id, storagePath);
+    setReferenceLibrary((prev) => prev.filter((r) => r.id !== id));
+  }, []);
+
   const handleAddCardToSources = React.useCallback(async (entry: CardLibraryEntry) => {
     if (sources.length >= 4) return;
     // Fetch the image as base64 for Gemini API
@@ -773,6 +802,7 @@ function AppContent() {
                   { id: 'history', label: 'История', icon: Layout },
                   { id: 'favorites', label: 'Избранное', icon: ImageIcon },
                   { id: 'library', label: 'Библиотека', icon: BookOpen },
+                  { id: 'references', label: 'Референсы', icon: Images },
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -1139,6 +1169,7 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               ASPECT_RATIOS={ASPECT_RATIOS}
               RESOLUTIONS={RESOLUTIONS}
               isDraggingRef={isDraggingRef}
+              userReferenceLibrary={referenceLibrary}
               cardLibrary={cardLibrary}
               onAddCardSource={handleAddCardToSources}
               onRemoveCardSource={handleRemoveCardFromSources}
@@ -1189,6 +1220,15 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               onDeleteCard={handleDeleteCard}
               setFullscreenImage={setFullscreenImage}
               isSaving={isSavingCard}
+            />
+          ) : activeTab === 'references' ? (
+            <ReferencesTab
+              key="references"
+              referenceLibrary={referenceLibrary}
+              onSaveReference={handleSaveReference}
+              onDeleteReference={handleDeleteReference}
+              setFullscreenImage={setFullscreenImage}
+              isSaving={isSavingReference}
             />
           ) : null}
         </AnimatePresence>

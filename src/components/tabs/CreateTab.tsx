@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
 import { DeckImportSection } from '../DeckImportSection';
-import type { CardLibraryEntry } from '../../services/supabaseService';
+import type { CardLibraryEntry, ReferenceLibraryEntry } from '../../services/supabaseService';
 
 interface CreateTabProps {
   sources: any[];
@@ -51,6 +51,7 @@ interface CreateTabProps {
   ASPECT_RATIOS: string[];
   RESOLUTIONS: string[];
   isDraggingRef: boolean;
+  userReferenceLibrary: ReferenceLibraryEntry[];
   cardLibrary: CardLibraryEntry[];
   onAddCardSource: (entry: CardLibraryEntry) => void;
   onRemoveCardSource: (sourceId: string) => void;
@@ -91,6 +92,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   ASPECT_RATIOS,
   RESOLUTIONS,
   isDraggingRef,
+  userReferenceLibrary,
   cardLibrary,
   onAddCardSource,
   onRemoveCardSource,
@@ -202,23 +204,48 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-5 gap-3">
-                  {REFERENCE_LIBRARY.map((item) => (
-                    <button 
-                      key={item.id}
-                      onClick={() => selectFromLibrary(item.url)}
-                      className="aspect-square rounded-xl overflow-hidden border border-white/5 hover:border-indigo-500/50 transition-all group relative shadow-sm"
-                      title={item.name}
-                    >
-                      <img src={item.url} alt={item.name} className="w-full h-full object-cover opacity-40 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
-                    </button>
-                  ))}
-                  <button 
-                    onClick={() => refInputRef.current?.click()}
-                    className="aspect-square rounded-xl border border-dashed border-white/10 flex items-center justify-center text-zinc-500 hover:text-indigo-400 hover:border-indigo-500/50 bg-white/5"
-                  >
-                    <Upload className="w-5 h-5" />
-                  </button>
+                <div className="space-y-4">
+                  {userReferenceLibrary.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600">Мои референсы</p>
+                      <div className="grid grid-cols-5 gap-3">
+                        {userReferenceLibrary.map((entry) => (
+                          <button
+                            key={entry.id}
+                            type="button"
+                            onClick={() => selectFromLibrary(entry.storageUrl)}
+                            className="aspect-square rounded-xl overflow-hidden border border-indigo-500/30 hover:border-indigo-500/60 transition-all group relative shadow-sm"
+                            title={entry.name}
+                          >
+                            <img src={entry.storageUrl} alt={entry.name} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="space-y-2">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600">Пресеты</p>
+                    <div className="grid grid-cols-5 gap-3">
+                      {REFERENCE_LIBRARY.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => selectFromLibrary(item.url)}
+                          className="aspect-square rounded-xl overflow-hidden border border-white/5 hover:border-indigo-500/50 transition-all group relative shadow-sm"
+                          title={item.name}
+                        >
+                          <img src={item.url} alt={item.name} className="w-full h-full object-cover opacity-40 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => refInputRef.current?.click()}
+                        className="aspect-square rounded-xl border border-dashed border-white/10 flex items-center justify-center text-zinc-500 hover:text-indigo-400 hover:border-indigo-500/50 bg-white/5"
+                      >
+                        <Upload className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
               <p className="text-[10px] text-zinc-500 text-center uppercase tracking-[0.3em] font-black">
@@ -357,7 +384,9 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                 <div className="flex items-center justify-between p-4 bg-zinc-900/50 rounded-2xl border border-white/5">
                   <div className="space-y-1">
                     <label className="text-[10px] font-black uppercase tracking-widest text-zinc-300">Максимальная точность</label>
-                    <p className="text-[10px] text-zinc-500">Запрещает ИИ изменять персонажей (лица, броню, детали)</p>
+                    <p className="text-[10px] text-zinc-500">
+                      Анализ исходников (vision), жёсткий промпт и проверка результата; при провале — одна доработка (Nano Banana 2)
+                    </p>
                   </div>
                   <button 
                     onClick={() => setSettings((s: any) => ({ ...s, strictMode: !s.strictMode }))}

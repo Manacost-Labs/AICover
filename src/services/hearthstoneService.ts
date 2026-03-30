@@ -36,7 +36,7 @@ export async function getDbfIdToCardIdMap(): Promise<Map<number, string>> {
 
     // Keep only collectible cards to reduce size
     const slim = allCards
-      .filter(c => c.id && c.dbfId)
+      .filter(c => c.id && c.dbfId && c.collectible === 1)
       .map(c => ({ id: c.id, dbfId: c.dbfId }));
 
     const toCache: CachedCards = { data: slim, fetchedAt: Date.now() };
@@ -71,15 +71,15 @@ export async function findLibraryCardsInDeck(
   for (const [dbfId, count] of deckMap) {
     const cardId = dbfToCardId.get(dbfId);
     if (cardId) {
-      deckCardIds.add(cardId);
-      deckCountByCardId.set(cardId, count);
+      const key = cardId.toLowerCase();
+      deckCardIds.add(key);
+      deckCountByCardId.set(key, count);
     }
   }
 
-  // Filter library by matching cardId (case-insensitive)
   const results: Array<{ entry: CardLibraryEntry; count: number }> = [];
   for (const entry of library) {
-    const normalId = entry.cardId.trim();
+    const normalId = entry.cardId.trim().toLowerCase();
     if (deckCardIds.has(normalId)) {
       results.push({ entry, count: deckCountByCardId.get(normalId) ?? 1 });
     }

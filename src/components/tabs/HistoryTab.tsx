@@ -2,8 +2,6 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { Layout } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
-import { set } from 'idb-keyval';
-
 interface HistoryTabProps {
   history: string[];
   setHistory: React.Dispatch<React.SetStateAction<string[]>>;
@@ -37,10 +35,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
           <p className="text-zinc-500 mt-2">Ваши последние генерации</p>
         </div>
         <button 
-          onClick={async () => {
-            setHistory([]);
-            await set('fusion_history', []);
-          }}
+          onClick={() => { setHistory([]); }}
           className="px-6 py-2 bg-red-500/10 text-red-500 rounded-full text-sm font-bold hover:bg-red-500/20 transition-all"
         >
           Очистить историю
@@ -51,7 +46,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
           {history.map((url, i) => (
             <ResultCard
-              key={i}
+              key={url}
               url={url}
               isLiked={likedSet.has(url)} 
               onToggleLike={toggleLike} 

@@ -2,6 +2,26 @@
 -- Fixes: "new row violates row-level security policy" for this app (browser uses anon key, no login).
 -- For a personal/single-user app only. For multi-tenant apps, replace with proper per-user policies.
 
+-- ─── Table: reference_library (composition references, storage under references/) ──
+
+CREATE TABLE IF NOT EXISTS public.reference_library (
+  id text PRIMARY KEY,
+  name text NOT NULL,
+  storage_path text NOT NULL,
+  mime_type text NOT NULL,
+  added_at bigint NOT NULL
+);
+
+ALTER TABLE public.reference_library ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "anon_all_reference_library" ON public.reference_library;
+CREATE POLICY "anon_all_reference_library"
+  ON public.reference_library
+  FOR ALL
+  TO anon
+  USING (true)
+  WITH CHECK (true);
+
 -- ─── Tables: card_library, history, favorites ───────────────────────────────
 
 ALTER TABLE public.card_library ENABLE ROW LEVEL SECURITY;
