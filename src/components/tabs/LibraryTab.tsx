@@ -164,7 +164,11 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
                       const item = e.clipboardData.items[i];
                       if (item.type.startsWith('image/')) {
                         const file = item.getAsFile();
-                        if (file) handleFile(file);
+                        if (file) {
+                          handleFile(file);
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }
                       }
                     }
                   }}

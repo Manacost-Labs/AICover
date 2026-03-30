@@ -124,6 +124,8 @@ interface UISource extends ImageSource {
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState<'create' | 'history' | 'favorites' | 'upscale' | 'expand' | 'library'>('create');
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
   const [sources, setSources] = useState<UISource[]>([]);
   const [upscaleSource, setUpscaleSource] = useState<ImageSource | null>(null);
   const [expandSource, setExpandSource] = useState<ImageSource | null>(null);
@@ -307,6 +309,8 @@ function AppContent() {
     checkKey();
 
     const handlePaste = (e: ClipboardEvent) => {
+      // Only "Создать" uses global image paste; other tabs (e.g. Library art drop zone) must not fill sources/reference
+      if (activeTabRef.current !== 'create') return;
       // Skip if target is an input or textarea
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       
