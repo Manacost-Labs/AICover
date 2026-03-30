@@ -20,11 +20,11 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { get, set } from 'idb-keyval';
-import { generateFusedCover, ImageSource, GenerationSettings, upscaleImage, expandImage } from './services/geminiService';
+import { generateFusedCover, ImageSource, GenerationSettings, upscaleImage, expandImage, analyzeReferenceCompositionVision } from './services/geminiService';
 import {
   isSupabaseConfigured,
   loadCardLibrary, saveCardToLibrary, deleteCardFromLibrary,
-  loadReferenceLibrary, saveReferenceToLibrary, deleteReferenceFromLibrary,
+  loadReferenceLibrary, saveReferenceToLibrary, deleteReferenceFromLibrary, updateReferenceVisionAnalysis, fetchUrlAsImageSource,
   loadHistory, saveToHistory, clearHistory,
   loadFavorites, addToFavorites, removeFromFavorites,
   migrateFromIDB,
@@ -147,6 +147,8 @@ function AppContent() {
   }, [sources]);
 
   const [reference, setReference] = useState<ImageSource | null>(null);
+  /** Saved Gemini vision JSON/text when reference was picked from reference library */
+  const [referenceVisionNotes, setReferenceVisionNotes] = useState<string | null>(null);
   const [baseImage, setBaseImage] = useState<ImageSource | null>(null);
   const [settings, setSettings] = useState<GenerationSettings>({
     model: "gemini-2.5-flash-image",
@@ -181,6 +183,7 @@ function AppContent() {
   const [referenceLibrary, setReferenceLibrary] = useState<ReferenceLibraryEntry[]>([]);
   const [isSavingCard, setIsSavingCard] = useState(false);
   const [isSavingReference, setIsSavingReference] = useState(false);
+  const [reanalyzingReferenceId, setReanalyzingReferenceId] = useState<string | null>(null);
 
   // Lightbox gallery context — derive image list from current active tab
   const lightboxImages = React.useMemo(() => {
@@ -385,6 +388,7 @@ function AppContent() {
         });
       } else {
         setReference({ data: base64, mimeType: file.type });
+        setReferenceVisionNotes(null);
       }
     };
     reader.onerror = () => {
@@ -544,7 +548,7 @@ function AppContent() {
     setError(null);
     setIsGenerating(true);
     try {
-      const images = await generateFusedCover(sources, reference, settings, baseImage, likedImages);
+      const images = await generateFusedCover(sources, reference, settings, baseImage, likedImages, referenceVisionNotes);
       setResults(images);
 
       const newHistory = [...images, ...history].slice(0, 50);
@@ -606,8 +610,34 @@ function AppContent() {
     try {
       const entry = await saveReferenceToLibrary(name, imageData, mimeType);
       setReferenceLibrary((prev) => [entry, ...prev]);
+      try {
+        const analysis = await analyzeReferenceCompositionVision({ data: imageData, mimeType });
+        await updateReferenceVisionAnalysis(entry.id, analysis);
+        setReferenceLibrary((prev) =>
+          prev.map((r) => (r.id === entry.id ? { ...r, visionAnalysis: analysis } : r))
+        );
+      } catch (e) {
+        console.error('Reference vision analysis failed', e);
+      }
     } finally {
       setIsSavingReference(false);
+    }
+  }, []);
+
+  const handleReanalyzeReference = React.useCallback(async (entry: ReferenceLibraryEntry) => {
+    setReanalyzingReferenceId(entry.id);
+    try {
+      const { data, mimeType } = await fetchUrlAsImageSource(entry.storageUrl);
+      const analysis = await analyzeReferenceCompositionVision({ data, mimeType });
+      await updateReferenceVisionAnalysis(entry.id, analysis);
+      setReferenceLibrary((prev) =>
+        prev.map((r) => (r.id === entry.id ? { ...r, visionAnalysis: analysis } : r))
+      );
+    } catch (e) {
+      console.error('Reanalyze reference failed', e);
+      setError('Не удалось пересчитать анализ референса.');
+    } finally {
+      setReanalyzingReferenceId(null);
     }
   }, []);
 
@@ -639,16 +669,20 @@ function AppContent() {
     setSources(prev => prev.filter(s => s.id !== sourceId));
   }, []);
 
-  const selectFromLibrary = async (url: string) => {
+  const updateReference = React.useCallback((r: ImageSource | null) => {
+    setReference(r);
+    if (!r) setReferenceVisionNotes(null);
+  }, []);
+
+  const selectReferenceFromLibrary = React.useCallback(async (entry: ReferenceLibraryEntry) => {
+    setReferenceVisionNotes(entry.visionAnalysis ?? null);
     try {
-      // If already a data URL, use directly
-      const match = url.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
+      const match = entry.storageUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
       if (match) {
-        setReference({ data: url, mimeType: match[1] });
+        setReference({ data: entry.storageUrl, mimeType: match[1] });
         return;
       }
-      // Fetch external URL and convert to base64 data URL
-      const response = await fetch(url);
+      const response = await fetch(entry.storageUrl);
       const blob = await response.blob();
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -659,7 +693,7 @@ function AppContent() {
       console.error("Failed to load library image", e);
       setError("Не удалось загрузить изображение из библиотеки.");
     }
-  };
+  }, []);
 
   if (!hasKey) {
     return (
@@ -1140,7 +1174,7 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               sources={sources}
               setSources={setSources}
               reference={reference}
-              setReference={setReference}
+              setReference={updateReference}
               settings={settings}
               setSettings={setSettings}
               baseImage={baseImage}
@@ -1166,7 +1200,7 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               handleDragOverRef={handleDragOverRef}
               handleDragLeaveRef={handleDragLeaveRef}
               handleDropRef={handleDropRef}
-              selectFromLibrary={selectFromLibrary}
+              selectReferenceFromLibrary={selectReferenceFromLibrary}
               ASPECT_RATIOS={ASPECT_RATIOS}
               RESOLUTIONS={RESOLUTIONS}
               isDraggingRef={isDraggingRef}
@@ -1228,6 +1262,8 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               referenceLibrary={referenceLibrary}
               onSaveReference={handleSaveReference}
               onDeleteReference={handleDeleteReference}
+              onReanalyzeReference={handleReanalyzeReference}
+              reanalyzingReferenceId={reanalyzingReferenceId}
               setFullscreenImage={setFullscreenImage}
               isSaving={isSavingReference}
             />

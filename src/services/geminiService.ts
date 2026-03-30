@@ -36,6 +36,78 @@ function dataUrlToImageSource(dataUrl: string): ImageSource {
   return { data: dataUrl, mimeType: match[1] };
 }
 
+const REFERENCE_VISION_PROMPT = `You are a vision analyst for a fantasy card-cover compositing pipeline. Analyze this REFERENCE IMAGE as a composition template (other characters will be substituted later).
+
+Output ONLY valid JSON (no markdown, no code fences). Use this exact shape:
+{
+  "subjects": [
+    {
+      "label": "subject_1",
+      "position_2d": "left|center|right and upper|mid|lower",
+      "depth_layer": "foreground|midground|background",
+      "scale_vs_frame": "small|medium|large relative to frame",
+      "pose_summary": "short English phrase"
+    }
+  ],
+  "environment": {
+    "type": "e.g. cave, battlefield, sky, interior",
+    "ground_plane": "visible|implied|none",
+    "horizon": "high|mid|low|none",
+    "key_background_elements": ["short English", "..."]
+  },
+  "spatial_depth": {
+    "overlaps": "who overlaps whom / atmospheric perspective",
+    "camera": "eye level|low|high, focal feel wide|normal|tele",
+    "depth_cues": "overlap, size gradient, fog, etc."
+  },
+  "lighting": {
+    "key_direction": "e.g. from upper left",
+    "contrast": "low|medium|high",
+    "shadow_placement": "short note"
+  },
+  "compositor_instructions": [
+    "3-6 imperative English lines: what to replicate in layout (positions, depth, camera), not colors or character identity"
+  ]
+}
+
+Rules:
+- Describe spatial layout, depth, and light so a compositor can place NEW characters into the SAME structure.
+- Do NOT require copying exact colors, text, logos, or fine art style from this template.
+- If you count figures, use subjects[] entries; allow empty array only if there are zero clear figures (then explain environment only).`;
+
+/**
+ * Deep composition + depth analysis for a saved reference image (Gemini multimodal vision).
+ * Returns JSON string or raw model text if JSON parsing fails downstream.
+ */
+export async function analyzeReferenceCompositionVision(image: ImageSource): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("API Key not found");
+  }
+  const ai = new GoogleGenAI({ apiKey });
+  try {
+    const res = await ai.models.generateContent({
+      model: VISION_MODEL,
+      contents: {
+        parts: [
+          { text: REFERENCE_VISION_PROMPT },
+          {
+            inlineData: {
+              data: image.data.split(",")[1] || image.data,
+              mimeType: image.mimeType,
+            },
+          },
+        ],
+      },
+    });
+    const text = (res.text || "").trim();
+    return text || "{}";
+  } catch (e) {
+    console.error("analyzeReferenceCompositionVision", e);
+    throw e;
+  }
+}
+
 /** Vision: lock-list per source — colors, light, must-preserve details (English, compact). */
 async function analyzeSourceCharactersForFusion(
   ai: GoogleGenAI,
@@ -220,7 +292,8 @@ export async function generateFusedCover(
   reference: ImageSource | null,
   settings: GenerationSettings,
   baseImage: ImageSource | null = null,
-  likedImages: string[] = []
+  likedImages: string[] = [],
+  referenceCompositionNotes: string | null = null
 ): Promise<string[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -234,31 +307,37 @@ export async function generateFusedCover(
   let sourceBrief = "";
 
   if (!baseImage) {
-    const refTask = reference
-      ? ai.models
-          .generateContent({
-            model: VISION_MODEL,
-            contents: {
-              parts: [
-                {
-                  text: "Analyze this image as a COMPOSITION TEMPLATE. For each main subject: 1) Position (left/right/center, depth). 2) Pose and scale vs frame. 3) Camera / perspective. DO NOT describe colors or character appearance — spatial layout only.",
+    const storedNotes = referenceCompositionNotes?.trim();
+    const refTask =
+      reference && storedNotes
+        ? Promise.resolve().then(() => {
+            compositionDescription = storedNotes;
+          })
+        : reference
+          ? ai.models
+              .generateContent({
+                model: VISION_MODEL,
+                contents: {
+                  parts: [
+                    {
+                      text: "Analyze this image as a COMPOSITION TEMPLATE. For each main subject: 1) Position (left/right/center, depth). 2) Pose and scale vs frame. 3) Camera / perspective. DO NOT describe colors or character appearance — spatial layout only.",
+                    },
+                    {
+                      inlineData: {
+                        data: reference.data.split(",")[1] || reference.data,
+                        mimeType: reference.mimeType,
+                      },
+                    },
+                  ],
                 },
-                {
-                  inlineData: {
-                    data: reference.data.split(",")[1] || reference.data,
-                    mimeType: reference.mimeType,
-                  },
-                },
-              ],
-            },
-          })
-          .then((r) => {
-            compositionDescription = r.text || "";
-          })
-          .catch((e) => {
-            console.error("Failed to describe composition", e);
-          })
-      : Promise.resolve();
+              })
+              .then((r) => {
+                compositionDescription = r.text || "";
+              })
+              .catch((e) => {
+                console.error("Failed to describe composition", e);
+              })
+          : Promise.resolve();
 
     const briefTask = analyzeSourceCharactersForFusion(ai, sources).then((b) => {
       sourceBrief = b;

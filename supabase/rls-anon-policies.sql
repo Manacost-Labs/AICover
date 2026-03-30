@@ -9,10 +9,15 @@ CREATE TABLE IF NOT EXISTS public.reference_library (
   name text NOT NULL,
   storage_path text NOT NULL,
   mime_type text NOT NULL,
-  added_at bigint NOT NULL
+  added_at bigint NOT NULL,
+  vision_analysis text
 );
 
 ALTER TABLE public.reference_library ENABLE ROW LEVEL SECURITY;
+
+-- Existing projects: add column if table was created without vision_analysis
+ALTER TABLE public.reference_library
+  ADD COLUMN IF NOT EXISTS vision_analysis text;
 
 DROP POLICY IF EXISTS "anon_all_reference_library" ON public.reference_library;
 CREATE POLICY "anon_all_reference_library"

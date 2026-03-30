@@ -95,6 +95,8 @@ export interface ReferenceLibraryEntry {
   storagePath: string;
   mimeType: string;
   addedAt: number;
+  /** JSON or text from Gemini vision analysis */
+  visionAnalysis: string | null;
 }
 
 export interface CardLibraryEntry {
@@ -220,6 +222,7 @@ export async function loadReferenceLibrary(): Promise<ReferenceLibraryEntry[]> {
     storageUrl: getPublicUrl(row.storage_path),
     mimeType: row.mime_type,
     addedAt: row.added_at,
+    visionAnalysis: row.vision_analysis ?? null,
   }));
 }
 
@@ -240,9 +243,22 @@ export async function saveReferenceToLibrary(
     storage_path: storagePath,
     mime_type: mimeType,
     added_at: Date.now(),
+    vision_analysis: null,
   });
   if (error) throw error;
-  return { id, name, storageUrl, storagePath, mimeType, addedAt: Date.now() };
+  return { id, name, storageUrl, storagePath, mimeType, addedAt: Date.now(), visionAnalysis: null };
+}
+
+export async function updateReferenceVisionAnalysis(id: string, visionAnalysis: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase not configured');
+  const { error } = await supabase.from('reference_library').update({ vision_analysis: visionAnalysis }).eq('id', id);
+  if (error) throw error;
+}
+
+/** Fetch remote image URL as data URL + mime (for re-analysis). */
+export async function fetchUrlAsImageSource(url: string): Promise<{ data: string; mimeType: string }> {
+  const { base64, mimeType } = await urlToBase64(url);
+  return { data: base64, mimeType };
 }
 
 export async function deleteReferenceFromLibrary(id: string, storagePath: string): Promise<void> {

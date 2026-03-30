@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Images, Plus, X, Trash2, Upload, Loader2, AlertTriangle } from 'lucide-react';
+import { Images, Plus, X, Trash2, Upload, Loader2, AlertTriangle, Settings } from 'lucide-react';
 import type { ReferenceLibraryEntry } from '../../services/supabaseService';
 import { OptimizedImage } from '../OptimizedImage';
 import { isSupabaseConfigured, formatSupabaseClientError } from '../../services/supabaseService';
@@ -9,6 +9,8 @@ interface ReferencesTabProps {
   referenceLibrary: ReferenceLibraryEntry[];
   onSaveReference: (name: string, imageData: string, mimeType: string) => Promise<void>;
   onDeleteReference: (id: string, storagePath: string) => Promise<void>;
+  onReanalyzeReference: (entry: ReferenceLibraryEntry) => Promise<void>;
+  reanalyzingReferenceId: string | null;
   setFullscreenImage: (url: string | null) => void;
   isSaving: boolean;
 }
@@ -17,9 +19,12 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
   referenceLibrary,
   onSaveReference,
   onDeleteReference,
+  onReanalyzeReference,
+  reanalyzingReferenceId,
   setFullscreenImage,
   isSaving,
 }) => {
+  const [settingsEntry, setSettingsEntry] = useState<ReferenceLibraryEntry | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formName, setFormName] = useState('');
   const [formImage, setFormImage] = useState<{ data: string; mimeType: string } | null>(null);
@@ -57,6 +62,10 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
     setFormImage(null);
     setSaveError(null);
   };
+
+  const detailEntry = settingsEntry
+    ? referenceLibrary.find(e => e.id === settingsEntry.id) ?? settingsEntry
+    : null;
 
   return (
     <motion.div
@@ -156,16 +165,79 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {detailEntry && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-zinc-950/90 backdrop-blur-md"
+            onClick={() => setSettingsEntry(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              onClick={e => e.stopPropagation()}
+              className="w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col bg-zinc-900 border border-white/10 rounded-[2rem] shadow-2xl"
+            >
+              <div className="flex items-center justify-between p-6 border-b border-white/5">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Анализ референса</p>
+                  <h3 className="text-lg font-black text-white mt-1 truncate pr-4">{detailEntry.name}</h3>
+                </div>
+                <button type="button" onClick={() => setSettingsEntry(null)} className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto flex-1 min-h-0">
+                {detailEntry.visionAnalysis ? (
+                  <pre className="text-xs text-zinc-300 whitespace-pre-wrap font-mono leading-relaxed break-words">
+                    {detailEntry.visionAnalysis}
+                  </pre>
+                ) : (
+                  <p className="text-sm text-zinc-500">Анализ ещё не выполнен. Нажмите «Пересчитать анализ» или дождитесь завершения после сохранения.</p>
+                )}
+              </div>
+              <div className="p-6 border-t border-white/5 flex flex-wrap gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={() => onReanalyzeReference(detailEntry)}
+                  disabled={!isSupabaseConfigured || reanalyzingReferenceId === detailEntry.id}
+                  className="px-6 py-2.5 rounded-2xl text-sm font-bold bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 flex items-center gap-2"
+                >
+                  {reanalyzingReferenceId === detailEntry.id ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  Пересчитать анализ
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {referenceLibrary.length > 0 ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
           {referenceLibrary.map(entry => (
             <motion.div key={entry.id} layout className="group relative rounded-[1.5rem] overflow-hidden bg-zinc-900 border border-white/5">
               <button type="button" className="w-full block" onClick={() => setFullscreenImage(entry.storageUrl)}>
                 <OptimizedImage src={entry.storageUrl} alt={entry.name} className="w-full h-auto object-cover aspect-video" referrerPolicy="no-referrer" />
+                {entry.visionAnalysis && (
+                  <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-indigo-600/90 text-[9px] font-black uppercase text-white">AI</span>
+                )}
               </button>
               <div className="p-2 flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-white truncate">{entry.name}</span>
-                <button type="button" onClick={() => onDeleteReference(entry.id, entry.storagePath)} className="p-1.5 text-red-400 hover:bg-red-500/10 rounded-lg shrink-0" title="Удалить"><Trash2 className="w-4 h-4" /></button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setSettingsEntry(entry)}
+                    className="p-1.5 text-zinc-400 hover:text-white hover:bg-white/10 rounded-lg"
+                    title="Настройки / анализ"
+                  >
+                    <Settings className="w-4 h-4" />
+                  </button>
+                  <button type="button" onClick={() => onDeleteReference(entry.id, entry.storagePath)} className="p-1.5 text-red-400 hover:bg-red-500/10 rounded-lg" title="Удалить"><Trash2 className="w-4 h-4" /></button>
+                </div>
               </div>
             </motion.div>
           ))}

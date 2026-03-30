@@ -47,7 +47,7 @@ interface CreateTabProps {
   handleDragOverRef: (e: React.DragEvent) => void;
   handleDragLeaveRef: () => void;
   handleDropRef: (e: React.DragEvent) => void;
-  selectFromLibrary: (url: string) => Promise<void>;
+  selectReferenceFromLibrary: (entry: ReferenceLibraryEntry) => Promise<void>;
   ASPECT_RATIOS: string[];
   RESOLUTIONS: string[];
   isDraggingRef: boolean;
@@ -87,7 +87,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   handleDragOverRef,
   handleDragLeaveRef,
   handleDropRef,
-  selectFromLibrary,
+  selectReferenceFromLibrary,
   ASPECT_RATIOS,
   RESOLUTIONS,
   isDraggingRef,
@@ -212,7 +212,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                       <button
                         key={entry.id}
                         type="button"
-                        onClick={() => selectFromLibrary(entry.storageUrl)}
+                        onClick={() => selectReferenceFromLibrary(entry)}
                         className="aspect-square rounded-xl overflow-hidden border border-indigo-500/30 hover:border-indigo-500/60 transition-all group relative shadow-sm"
                         title={entry.name}
                       >
