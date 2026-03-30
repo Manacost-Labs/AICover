@@ -29,17 +29,17 @@ export const UpscaleResultCard: React.FC<UpscaleResultCardProps> = React.memo(({
       animate={{ opacity: 1, scale: 1 }}
       className="bg-zinc-900/50 border border-white/5 rounded-[2.5rem] overflow-hidden group shadow-sm hover:shadow-md transition-all"
     >
-      <div className="aspect-video relative bg-zinc-950 flex items-center justify-center">
+      <div className="relative bg-zinc-950">
         {item.status === 'loading' ? (
-          <div className="flex flex-col items-center gap-4">
+          <div className="aspect-video flex flex-col items-center justify-center gap-4">
             <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
             <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Обработка ({item.resolution})...</p>
           </div>
         ) : item.status === 'error' ? (
-          <div className="flex flex-col items-center gap-4 p-6 text-center">
+          <div className="aspect-video flex flex-col items-center justify-center gap-4 p-6 text-center">
             <AlertTriangle className="w-10 h-10 text-red-500" />
             <p className="text-xs text-red-400 font-medium">{item.error}</p>
-            <button 
+            <button
               onClick={() => onRetry(item.originalUrl, item.id)}
               className="px-6 py-2 bg-white/5 hover:bg-white/10 text-white rounded-full text-[10px] font-black uppercase tracking-widest transition-all"
             >
@@ -48,9 +48,9 @@ export const UpscaleResultCard: React.FC<UpscaleResultCardProps> = React.memo(({
           </div>
         ) : (
           <>
-            <img 
-              src={item.upscaledUrl} 
-              className="w-full h-full object-contain cursor-pointer" 
+            <img
+              src={item.upscaledUrl}
+              className="w-full h-auto block cursor-pointer"
               onClick={() => onFullscreen(item.upscaledUrl!)}
               referrerPolicy="no-referrer"
             />

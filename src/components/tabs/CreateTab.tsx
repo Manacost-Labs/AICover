@@ -10,10 +10,7 @@ import {
   Sparkles,
   Loader2,
   Maximize2,
-  AlertTriangle,
-  ChevronDown,
-  ChevronUp,
-  Code2
+  AlertTriangle
 } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
 
@@ -90,8 +87,6 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   RESOLUTIONS,
   isDraggingRef
 }) => {
-  const [showPromptPreview, setShowPromptPreview] = React.useState(false);
-
   return (
     <motion.div
       key="create"
@@ -367,90 +362,6 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   </button>
                 </div>
 
-                {/* Prompt Preview */}
-                <div className="border-t border-white/5 pt-6 space-y-3">
-                  <button
-                    onClick={() => setShowPromptPreview(!showPromptPreview)}
-                    className="w-full flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Code2 className="w-4 h-4" />
-                      Промпт генерации
-                    </span>
-                    {showPromptPreview ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                  </button>
-
-                  <AnimatePresence>
-                    {showPromptPreview && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        className="overflow-hidden space-y-3"
-                      >
-                        {/* Russian */}
-                        <div className="rounded-2xl overflow-hidden border border-white/5">
-                          <div className="px-4 py-2 bg-blue-500/10 border-b border-white/5">
-                            <span className="text-[10px] font-black uppercase tracking-widest text-blue-400">Русский</span>
-                          </div>
-                          <pre className="p-4 text-[10px] text-zinc-400 leading-relaxed whitespace-pre-wrap font-mono bg-zinc-950/50 max-h-52 overflow-y-auto">{baseImage
-? `ЗАДАЧА: ХИРУРГИЧЕСКАЯ ДОРАБОТКА
-ЦЕЛЬ: Изменить базовое изображение, используя исходного персонажа как фиксированный объект
-ПРАВИЛА:
-1. НУЛЕВОЕ ПЕРЕРИСОВЫВАНИЕ: лицо, волосы, глаза — 100% идентичны источнику
-2. ПИКСЕЛЬНОЕ СОВПАДЕНИЕ: точные силуэты, без новых конечностей и брони
-3. СТИЛЬ: яркая фэнтезийная цифровая живопись (Hearthstone)
-4. ИНТЕГРАЦИЯ: единое освещение, атмосфера, контактные тени
-5. ОСВЕЩЕНИЕ: один доминирующий источник, сильная подсветка контура
-6. ЦВЕТ: соответствие окружающему свету среды
-7. ЗАЗЕМЛЕНИЕ: реалистичные тени, соединённые с ногами
-8. ПРОМПТ: ${settings.prompt ? `ТОЛЬКО: ${settings.prompt}` : 'Улучшить интеграцию'}
-ИСКЛЮЧИТЬ: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}перерисовка, изменение лиц, мутации, лишние конечности, коллаж`
-: `ЗАДАЧА: МАСТЕР-КОМПОЗИТИНГ — СЛИЯНИЕ ПЕРСОНАЖЕЙ
-ПРАВИЛА:
-1. НУЛЕВОЕ ПЕРЕРИСОВЫВАНИЕ: персонажи — неизменяемые объекты
-2. ТОЧНОСТЬ: сохрани каждую деталь (броня, руны, волосы) в точности
-3. СТИЛЬ: яркая фэнтезийная цифровая живопись (Hearthstone)
-4. ОКРУЖЕНИЕ: создай НОВЫЙ фон, дополняющий освещение персонажей
-5. БЕЗ КОЛЛАЖА: единая, цельная, законченная сцена
-6. ОСВЕЩЕНИЕ: один доминирующий источник света
-7. ЗАЗЕМЛЕНИЕ: тени у ног, без парения${settings.prompt ? `\nПОЛЬЗОВАТЕЛЬ: ${settings.prompt}` : ''}
-ИСКЛЮЧИТЬ: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}перерисовка, изменение лиц, мутации, лишние конечности, коллаж`}</pre>
-                        </div>
-
-                        {/* English */}
-                        <div className="rounded-2xl overflow-hidden border border-white/5">
-                          <div className="px-4 py-2 bg-indigo-500/10 border-b border-white/5">
-                            <span className="text-[10px] font-black uppercase tracking-widest text-indigo-400">English — API Prompt</span>
-                          </div>
-                          <pre className="p-4 text-[10px] text-zinc-400 leading-relaxed whitespace-pre-wrap font-mono bg-zinc-950/50 max-h-52 overflow-y-auto">{baseImage
-? `TASK: SURGICAL REFINEMENT.
-OBJECTIVE: Modify "BASE IMAGE" using "SOURCE CHARACTER" as FIXED ASSETS.
-RULES:
-1. ZERO REDRAWING: Faces, hair, eyes MUST be 100% identical to source.
-2. PIXEL-PERFECT: Exact silhouettes. No new limbs or armor.
-3. STYLE: VIBRANT FANTASY DIGITAL PAINTING (Hearthstone style).
-4. INTEGRATION: Unified lighting, atmosphere, contact shadows.
-5. LIGHTING: Single dominant light source. Strong rim lighting.
-6. COLOR: Match environment ambient light.
-7. GROUNDING: Realistic shadows connected to feet.
-8. PROMPT: ${settings.prompt ? `ONLY: ${settings.prompt}` : 'Improve integration.'}
-AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing, changing faces, mutation, extra limbs, collage, split-screen`
-: `TASK: MASTER COMPOSITING - FUSE CHARACTERS.
-RULES:
-1. ZERO REDRAWING: Use source characters as immutable assets.
-2. FIDELITY: Preserve every detail (armor, runes, hair) exactly.
-3. STYLE: VIBRANT FANTASY DIGITAL PAINTING (Hearthstone style).
-4. ENVIRONMENT: Generate NEW background complementing characters' lighting.
-5. NO COLLAGE: One seamless, unified scene.
-6. LIGHTING: One dominant light source matching characters.
-7. GROUNDING: Shadows connected to feet. No floating.${settings.prompt ? `\nUSER: ${settings.prompt}` : ''}
-AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing, changing faces, mutation, extra limbs, collage, split-screen`}</pre>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
               </div>
           </section>
         </div>

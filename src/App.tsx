@@ -13,7 +13,8 @@ import {
   Maximize2,
   Loader2,
   ChevronRight,
-  ChevronLeft
+  ChevronLeft,
+  Settings
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { get, set } from 'idb-keyval';
@@ -159,6 +160,7 @@ function AppContent() {
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Lightbox gallery context — derive image list from current active tab
   const lightboxImages = React.useMemo(() => {
@@ -693,7 +695,14 @@ function AppContent() {
           </div>
 
           <div className="flex items-center gap-6">
-            <button 
+            <button
+              onClick={() => setShowSettings(true)}
+              className="p-2.5 rounded-full bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all"
+              title="Настройки промпта"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
+            <button
               onClick={() => { setSources([]); setReference(null); setResults([]); setBaseImage(null); }}
               className="text-sm font-bold text-zinc-500 hover:text-white transition-colors uppercase tracking-widest"
             >
@@ -710,6 +719,156 @@ function AppContent() {
           </div>
         </div>
       </header>
+
+      {/* Settings Panel */}
+      <AnimatePresence>
+        {showSettings && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[90] bg-zinc-950/60 backdrop-blur-sm"
+              onClick={() => setShowSettings(false)}
+            />
+            {/* Drawer */}
+            <motion.aside
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+              className="fixed top-0 right-0 h-full w-full max-w-lg z-[91] bg-zinc-950 border-l border-white/10 shadow-2xl flex flex-col overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between px-8 py-6 border-b border-white/5 shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-indigo-500/10 rounded-xl flex items-center justify-center border border-indigo-500/20">
+                    <Settings className="w-4 h-4 text-indigo-400" />
+                  </div>
+                  <h2 className="text-sm font-black uppercase tracking-widest text-white">Промпт генерации</h2>
+                </div>
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="p-2 bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white rounded-full transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Drawer Body */}
+              <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6">
+                <p className="text-xs text-zinc-500 leading-relaxed">
+                  Системный промпт, который отправляется в Gemini API при каждой генерации. Ваши настройки автоматически встраиваются в него.
+                </p>
+
+                {/* Mode Badge */}
+                <div className="flex items-center gap-2">
+                  <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${baseImage ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
+                    {baseImage ? '⚡ Режим доработки' : '✨ Режим создания'}
+                  </span>
+                  {settings.strictMode && (
+                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border bg-amber-500/10 text-amber-400 border-amber-500/20">
+                      🔒 Строгий режим
+                    </span>
+                  )}
+                </div>
+
+                {/* Russian */}
+                <div className="rounded-2xl overflow-hidden border border-white/5">
+                  <div className="px-4 py-3 bg-blue-500/10 border-b border-white/5 flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-blue-400">🇷🇺 Описание (Русский)</span>
+                  </div>
+                  <pre className="p-5 text-[11px] text-zinc-400 leading-relaxed whitespace-pre-wrap font-mono bg-zinc-950/80 max-h-72 overflow-y-auto scrollbar-thin">{baseImage
+? `ЗАДАЧА: ХИРУРГИЧЕСКАЯ ДОРАБОТКА
+ЦЕЛЬ: Изменить базовое изображение, используя исходного персонажа как фиксированный объект
+ПРАВИЛА:
+1. НУЛЕВОЕ ПЕРЕРИСОВЫВАНИЕ: лицо, волосы, глаза — 100% идентичны источнику
+2. ПИКСЕЛЬНОЕ СОВПАДЕНИЕ: точные силуэты, без новых конечностей и брони
+3. СТИЛЬ: яркая фэнтезийная цифровая живопись (Hearthstone)
+4. ИНТЕГРАЦИЯ: единое освещение, атмосфера, контактные тени
+5. ОСВЕЩЕНИЕ: один доминирующий источник, сильная подсветка контура
+6. ЦВЕТ: соответствие окружающему свету среды
+7. ЗАЗЕМЛЕНИЕ: реалистичные тени, соединённые с ногами
+8. ПРОМПТ: ${settings.prompt ? `ТОЛЬКО: ${settings.prompt}` : 'Улучшить интеграцию'}
+ИСКЛЮЧИТЬ: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}перерисовка, изменение лиц, мутации, лишние конечности, коллаж`
+: `ЗАДАЧА: МАСТЕР-КОМПОЗИТИНГ — СЛИЯНИЕ ПЕРСОНАЖЕЙ
+ПРАВИЛА:
+1. НУЛЕВОЕ ПЕРЕРИСОВЫВАНИЕ: персонажи — неизменяемые объекты
+2. ТОЧНОСТЬ: сохрани каждую деталь (броня, руны, волосы) в точности
+3. СТИЛЬ: яркая фэнтезийная цифровая живопись (Hearthstone)
+4. ОКРУЖЕНИЕ: создай НОВЫЙ фон, дополняющий освещение персонажей
+5. БЕЗ КОЛЛАЖА: единая, цельная, законченная сцена
+6. ОСВЕЩЕНИЕ: один доминирующий источник света
+7. ЗАЗЕМЛЕНИЕ: тени у ног, без парения${settings.prompt ? `\nПОЛЬЗОВАТЕЛЬ: ${settings.prompt}` : ''}
+ИСКЛЮЧИТЬ: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}перерисовка, изменение лиц, мутации, лишние конечности, коллаж`}</pre>
+                </div>
+
+                {/* English */}
+                <div className="rounded-2xl overflow-hidden border border-white/5">
+                  <div className="px-4 py-3 bg-indigo-500/10 border-b border-white/5 flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-indigo-400">🇬🇧 API Prompt (English)</span>
+                  </div>
+                  <pre className="p-5 text-[11px] text-zinc-400 leading-relaxed whitespace-pre-wrap font-mono bg-zinc-950/80 max-h-72 overflow-y-auto scrollbar-thin">{baseImage
+? `TASK: SURGICAL REFINEMENT.
+OBJECTIVE: Modify "BASE IMAGE" using "SOURCE CHARACTER" as FIXED ASSETS.
+RULES:
+1. ZERO REDRAWING: Faces, hair, eyes MUST be 100% identical to source.
+2. PIXEL-PERFECT: Exact silhouettes. No new limbs or armor.
+3. STYLE: VIBRANT FANTASY DIGITAL PAINTING (Hearthstone style).
+4. INTEGRATION: Unified lighting, atmosphere, contact shadows.
+5. LIGHTING: Single dominant light source. Strong rim lighting.
+6. COLOR: Match environment ambient light.
+7. GROUNDING: Realistic shadows connected to feet.
+8. PROMPT: ${settings.prompt ? `ONLY: ${settings.prompt}` : 'Improve integration.'}
+AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing, changing faces, mutation, extra limbs, collage, split-screen`
+: `TASK: MASTER COMPOSITING - FUSE CHARACTERS.
+RULES:
+1. ZERO REDRAWING: Use source characters as immutable assets.
+2. FIDELITY: Preserve every detail (armor, runes, hair) exactly.
+3. STYLE: VIBRANT FANTASY DIGITAL PAINTING (Hearthstone style).
+4. ENVIRONMENT: Generate NEW background complementing characters' lighting.
+5. NO COLLAGE: One seamless, unified scene.
+6. LIGHTING: One dominant light source matching characters.
+7. GROUNDING: Shadows connected to feet. No floating.${settings.prompt ? `\nUSER: ${settings.prompt}` : ''}
+AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing, changing faces, mutation, extra limbs, collage, split-screen`}</pre>
+                </div>
+
+                {/* Current Settings Summary */}
+                <div className="rounded-2xl border border-white/5 overflow-hidden">
+                  <div className="px-4 py-3 bg-zinc-900 border-b border-white/5">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Текущие настройки</span>
+                  </div>
+                  <div className="p-5 grid grid-cols-2 gap-4">
+                    {[
+                      { label: 'Модель', value: settings.model.replace('gemini-', 'G-').replace('-image-preview', '').replace('-image', '') },
+                      { label: 'Формат', value: settings.aspectRatio },
+                      { label: 'Разрешение', value: settings.imageSize },
+                      { label: 'Вариантов', value: String(settings.batchSize) },
+                    ].map(item => (
+                      <div key={item.label} className="space-y-1">
+                        <div className="text-[9px] font-black uppercase tracking-widest text-zinc-600">{item.label}</div>
+                        <div className="text-xs font-bold text-zinc-300">{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Drawer Footer */}
+              <div className="px-8 py-5 border-t border-white/5 shrink-0">
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="w-full py-3 bg-white text-zinc-950 font-black rounded-2xl hover:bg-zinc-100 transition-all text-sm uppercase tracking-widest"
+                >
+                  Закрыть
+                </button>
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
 
       <main className="max-w-7xl mx-auto p-6 relative z-10">
         <AnimatePresence>
