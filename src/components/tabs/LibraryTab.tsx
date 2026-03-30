@@ -101,8 +101,8 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
                 <code className="bg-amber-500/10 px-1 rounded">https://&lt;project-ref&gt;.supabase.co</code> (не только id проекта).
               </span>
               <span className="block">
-                <code className="bg-amber-500/10 px-1 rounded">VITE_SUPABASE_ANON_KEY</code> — ключ <strong className="text-amber-400">anon public</strong> из Supabase (Project Settings → API), длинная строка, обычно начинается с{' '}
-                <code className="bg-amber-500/10 px-1 rounded">eyJ</code>. Сюда нельзя вставлять URL проекта.
+                <code className="bg-amber-500/10 px-1 rounded">VITE_SUPABASE_ANON_KEY</code> — <strong className="text-amber-400">Publishable key</strong> (начинается с{' '}
+                <code className="bg-amber-500/10 px-1 rounded">sb_publishable_</code>) или старый <strong className="text-amber-400">anon public</strong> JWT (вкладка Legacy). <strong className="text-amber-400">Secret key</strong> в браузер не вставлять.
               </span>
             </p>
           </div>

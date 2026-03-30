@@ -18,8 +18,9 @@ function normalizeAnonKey(raw: string): string {
   return stripEnvQuotes(raw).replace(/\s+/g, '');
 }
 
-/** Supabase anon key is a JWT: header.payload.signature */
-function isLikelyJwt(key: string): boolean {
+/** Legacy anon key is a JWT (three dot-separated segments). New keys use `sb_publishable_...`. */
+function isValidSupabaseClientKey(key: string): boolean {
+  if (key.startsWith('sb_publishable_')) return true;
   const parts = key.split('.');
   return parts.length === 3 && parts.every(p => p.length > 0);
 }
@@ -32,9 +33,9 @@ function createSupabaseSafe(): SupabaseClient | null {
 
   const url = stripEnvQuotes(urlRaw);
   const key = normalizeAnonKey(keyRaw);
-  if (!isLikelyJwt(key)) {
+  if (!isValidSupabaseClientKey(key)) {
     console.error(
-      'VITE_SUPABASE_ANON_KEY must be a full JWT (three dot-separated segments). Copy "anon public" from Supabase → Project Settings → API.'
+      'VITE_SUPABASE_ANON_KEY: use Publishable key (sb_publishable_…) or legacy anon JWT from Supabase → Project Settings → API.'
     );
     return null;
   }
