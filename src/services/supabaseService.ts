@@ -1,12 +1,24 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { get, set, del } from 'idb-keyval';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-export const supabase = (supabaseUrl && supabaseKey)
-  ? createClient(supabaseUrl, supabaseKey)
-  : null;
+/** Never throw at module load — invalid env would otherwise blank-screen the whole app. */
+function createSupabaseSafe(): SupabaseClient | null {
+  const url = supabaseUrl?.trim();
+  const key = supabaseKey?.trim();
+  if (!url || !key || url === 'undefined' || key === 'undefined') return null;
+  try {
+    new URL(url);
+    return createClient(url, key);
+  } catch (e) {
+    console.error('Supabase init failed (check VITE_SUPABASE_URL / ANON_KEY):', e);
+    return null;
+  }
+}
+
+export const supabase = createSupabaseSafe();
 
 export const isSupabaseConfigured = !!supabase;
 
