@@ -92,8 +92,18 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
           <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0" />
           <div className="text-sm">
             <p className="font-bold mb-1">Supabase не настроен</p>
-            <p className="text-amber-500/80 text-xs leading-relaxed">
-              Библиотека карт требует Supabase. Добавьте переменные <code className="bg-amber-500/10 px-1 rounded">VITE_SUPABASE_URL</code> и <code className="bg-amber-500/10 px-1 rounded">VITE_SUPABASE_ANON_KEY</code> в настройки Vercel.
+            <p className="text-amber-500/80 text-xs leading-relaxed space-y-2">
+              <span className="block">
+                Библиотека карт требует Supabase. В Vercel → Environment Variables задайте оба значения и сделайте <strong className="text-amber-400">Redeploy</strong>.
+              </span>
+              <span className="block">
+                <code className="bg-amber-500/10 px-1 rounded">VITE_SUPABASE_URL</code> — полный URL вида{' '}
+                <code className="bg-amber-500/10 px-1 rounded">https://&lt;project-ref&gt;.supabase.co</code> (не только id проекта).
+              </span>
+              <span className="block">
+                <code className="bg-amber-500/10 px-1 rounded">VITE_SUPABASE_ANON_KEY</code> — ключ <strong className="text-amber-400">anon public</strong> из Supabase (Project Settings → API), длинная строка, обычно начинается с{' '}
+                <code className="bg-amber-500/10 px-1 rounded">eyJ</code>. Сюда нельзя вставлять URL проекта.
+              </span>
             </p>
           </div>
         </div>
