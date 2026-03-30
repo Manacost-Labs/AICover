@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, Suspense } from 'react';
 import {
   Sparkles,
   X,
@@ -44,14 +44,29 @@ import {
   type CardLibraryEntry,
   type ReferenceLibraryEntry,
 } from './services/supabaseService';
-import { CreateTab } from './components/tabs/CreateTab';
-import { UpscaleTab } from './components/tabs/UpscaleTab';
-import { ExpandTab } from './components/tabs/ExpandTab';
-import { HistoryTab } from './components/tabs/HistoryTab';
-import { FavoritesTab } from './components/tabs/FavoritesTab';
-import { LibraryTab } from './components/tabs/LibraryTab';
-import { ReferencesTab } from './components/tabs/ReferencesTab';
 import { ASPECT_RATIOS, RESOLUTIONS } from './constants';
+
+const CreateTab = React.lazy(() =>
+  import('./components/tabs/CreateTab').then((m) => ({ default: m.CreateTab }))
+);
+const UpscaleTab = React.lazy(() =>
+  import('./components/tabs/UpscaleTab').then((m) => ({ default: m.UpscaleTab }))
+);
+const ExpandTab = React.lazy(() =>
+  import('./components/tabs/ExpandTab').then((m) => ({ default: m.ExpandTab }))
+);
+const HistoryTab = React.lazy(() =>
+  import('./components/tabs/HistoryTab').then((m) => ({ default: m.HistoryTab }))
+);
+const FavoritesTab = React.lazy(() =>
+  import('./components/tabs/FavoritesTab').then((m) => ({ default: m.FavoritesTab }))
+);
+const LibraryTab = React.lazy(() =>
+  import('./components/tabs/LibraryTab').then((m) => ({ default: m.LibraryTab }))
+);
+const ReferencesTab = React.lazy(() =>
+  import('./components/tabs/ReferencesTab').then((m) => ({ default: m.ReferencesTab }))
+);
 
 // Error Boundary Component
 interface ErrorBoundaryProps {
@@ -744,7 +759,7 @@ function AppContent() {
       const batch = resultsRef.current;
       const siblings = batch.filter(u => u !== url);
       const alternatives: ImageSource[] = [];
-      for (const u of siblings.slice(0, 7)) {
+      for (const u of siblings.slice(0, 3)) {
         alternatives.push(await imageUrlToImageSource(u));
       }
       const text = await analyzeFavoriteChoiceVision(chosen, alternatives, {
@@ -938,7 +953,7 @@ function AppContent() {
     sourceInputRef.current?.click();
   };
 
-  const canRunFusion = React.useMemo(() => {
+  const canRunCover = React.useMemo(() => {
     if (createLayoutMode === 'cover') return sources.length >= 2;
     const roles = sceneRolesOrder(scenePlan);
     return roles.every(r => sources.some(s => s.role === r));
@@ -994,9 +1009,12 @@ function AppContent() {
           <div className="w-24 h-24 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-2xl shadow-blue-500/20 border border-white/10">
             <Sparkles className="w-12 h-12 text-white" />
           </div>
-          <h1 className="text-5xl font-black tracking-tighter mb-4 bg-clip-text text-transparent bg-gradient-to-b from-white to-zinc-500">
-            Fusion AI
-          </h1>
+          <div className="mb-4">
+            <h1 className="text-5xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-white to-zinc-500">
+              Cover
+            </h1>
+            <p className="text-sm font-bold uppercase tracking-[0.25em] text-zinc-500 mt-2">Обложки с ИИ</p>
+          </div>
           <p className="text-zinc-400 text-lg leading-relaxed mb-10">
             {window.aistudio
               ? "Для начала работы необходимо выбрать API ключ Gemini. Это бесплатно и безопасно."
@@ -1072,11 +1090,26 @@ function AppContent() {
       <header className="border-b border-white/5 bg-zinc-950/80 backdrop-blur-2xl sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
           <div className="flex items-center gap-10">
-            <div className="flex items-center gap-3 group cursor-pointer" onClick={() => setActiveTab('create')}>
+            <div
+              className="flex items-center gap-3 group cursor-pointer"
+              onClick={() => setActiveTab('create')}
+              title="Cover — главная"
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setActiveTab('create');
+                }
+              }}
+            >
               <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20 group-hover:scale-110 transition-transform">
                 <Sparkles className="w-6 h-6 text-white" />
               </div>
-              <span className="font-black text-xl tracking-tighter uppercase text-white">Fusion</span>
+              <div className="flex flex-col leading-none">
+                <span className="font-black text-xl tracking-tight text-white">Cover</span>
+                <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mt-0.5">Обложки</span>
+              </div>
             </div>
 
             <nav className="hidden md:flex items-center gap-4">
@@ -1142,7 +1175,7 @@ function AppContent() {
             </button>
             <button 
               onClick={handleGenerate}
-              disabled={isGenerating || !canRunFusion}
+              disabled={isGenerating || !canRunCover}
               className={`px-8 py-3 font-black rounded-full hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-xl uppercase tracking-tighter text-sm ${baseImage ? 'bg-indigo-600 text-white shadow-indigo-500/40' : 'bg-white text-zinc-950 shadow-white/20'}`}
             >
               {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
@@ -1402,6 +1435,13 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
             </motion.div>
           )}
 
+          <Suspense
+            fallback={
+              <div className="flex min-h-[50vh] w-full items-center justify-center py-24" role="status" aria-label="Загрузка">
+                <Loader2 className="h-9 w-9 animate-spin text-zinc-500" />
+              </div>
+            }
+          >
           {activeTab === 'upscale' ? (
             <UpscaleTab 
               key="upscale"
@@ -1552,6 +1592,7 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               isSaving={isSavingReference}
             />
           ) : null}
+          </Suspense>
         </AnimatePresence>
       </main>
     </div>

@@ -91,6 +91,51 @@ function dataUrlToImageSource(dataUrl: string): ImageSource {
   return { data: dataUrl, mimeType: match[1] };
 }
 
+const SOURCE_BRIEF_MAX_CHARS = 600;
+/** Limit parallel vision QA + refine calls in strict mode (429 / instability). */
+const STRICT_VISION_CONCURRENCY = 2;
+
+/** Keep vision-derived briefs bounded (main generation prompt + tokens). */
+function truncateUtf16(text: string, maxLen: number): string {
+  const t = text.trim();
+  if (t.length <= maxLen) return t;
+  const cut = t.slice(0, maxLen);
+  const lastSpace = cut.lastIndexOf(" ");
+  const head = lastSpace > maxLen * 0.55 ? cut.slice(0, lastSpace) : cut;
+  return head.trimEnd() + "…";
+}
+
+/**
+ * Favorite / benchmark image URL → Gemini inlineData payload.
+ * Supports data URLs and http(s) (e.g. Supabase public URLs after migration).
+ */
+export async function likedUrlToInlineData(likedUrl: string): Promise<{ data: string; mimeType: string } | null> {
+  const dataMatch = likedUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
+  if (dataMatch) {
+    return { data: dataMatch[2], mimeType: dataMatch[1] };
+  }
+  if (likedUrl.startsWith("http://") || likedUrl.startsWith("https://")) {
+    try {
+      const res = await fetch(likedUrl);
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onloadend = () => resolve(fr.result as string);
+        fr.onerror = () => reject(new Error("FileReader"));
+        fr.readAsDataURL(blob);
+      });
+      const m = dataUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
+      if (!m) return null;
+      return { data: m[2], mimeType: m[1] };
+    } catch (e) {
+      console.error("likedUrlToInlineData", e);
+      return null;
+    }
+  }
+  return null;
+}
+
 const REFERENCE_VISION_PROMPT = `You are a vision analyst for a fantasy card-cover compositing pipeline. Analyze this REFERENCE IMAGE as a composition template (other characters will be substituted later).
 
 Output ONLY valid JSON (no markdown, no code fences). Use this exact shape:
@@ -261,7 +306,8 @@ Separate characters with a line "---". Max ~500 characters total.`,
       model: VISION_MODEL,
       contents: { parts },
     });
-    return (res.text || "").trim();
+    const raw = (res.text || "").trim();
+    return raw ? truncateUtf16(raw, SOURCE_BRIEF_MAX_CHARS) : "";
   } catch (e) {
     console.error("analyzeSourceCharactersForFusion", e);
     return "";
@@ -282,19 +328,10 @@ async function visionCheckFusionOutput(
   }
   const parts: any[] = [
     {
-      text: `You are a strict QC reviewer for character compositing.
-
-You see SOURCE character images (in order) and one OUTPUT image that should combine them into ONE scene.
-
-Evaluate:
-1) IDENTITY: Do each character's face, skin, hair, and costume match the corresponding SOURCE (no different face, no redesigned outfit)?
-2) SCENE: Single coherent environment (not a collage / split lighting)?
-3) LIGHTING: Acceptable unified light on characters (minor grading OK; broken or contradictory light = fail)?
-
-Return ONLY valid JSON, no markdown:
-{"pass":true|false,"issues":["bullet in English",...]}
-
-Set pass to false if any character is clearly redrawn or unrecognizable vs its SOURCE, or the image is an obvious collage.`,
+      text: `Strict QC: SOURCE images (order) vs OUTPUT. One combined scene expected.
+Check: (1) identity vs each SOURCE (2) single environment (3) unified lighting.
+JSON only, no markdown: {"pass":true|false,"issues":["English",...]}
+pass=false if redrawn/unrecognizable vs SOURCE or obvious collage.`,
     },
   ];
   sources.forEach((src, idx) => {
@@ -371,10 +408,10 @@ async function refineFusionAfterVision(
       text: "QUALITY BENCHMARKS (style only, not identity):",
     });
     for (const likedUrl of likedImages.slice(0, 2)) {
-      const match = likedUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
-      if (match) {
+      const inline = await likedUrlToInlineData(likedUrl);
+      if (inline) {
         parts.push({
-          inlineData: { data: match[2], mimeType: match[1] },
+          inlineData: { data: inline.data, mimeType: inline.mimeType },
         });
       }
     }
@@ -503,17 +540,15 @@ export async function generateFusedCover(
 
     if (likedImages.length > 0) {
       parts.push({ text: "EXAMPLES OF HIGH-QUALITY RESULTS (Use these as a benchmark for quality, lighting, and integration):" });
-      // Only use up to 3 liked images to avoid overwhelming the prompt
       const recentLikes = likedImages.slice(0, 3);
       for (const likedUrl of recentLikes) {
         try {
-          // Extract base64 and mime type from data URL
-          const match = likedUrl.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
-          if (match) {
+          const inline = await likedUrlToInlineData(likedUrl);
+          if (inline) {
             parts.push({
               inlineData: {
-                data: match[2],
-                mimeType: match[1],
+                data: inline.data,
+                mimeType: inline.mimeType,
               },
             });
           }
@@ -600,20 +635,24 @@ export async function generateFusedCover(
   let results = resultsArrays.flat();
 
   if (settings.strictMode && !baseImage && sources.length >= 2 && results.length > 0) {
-    results = await Promise.all(
-      results.map(async (url) => {
-        try {
-          const { pass, issues } = await visionCheckFusionOutput(ai, sources, url);
-          if (pass) return url;
-          const issueList = issues.length ? issues : ["Scene or identity coherence failed automated vision check"];
-          const refined = await refineFusionAfterVision(ai, model, settings, sources, url, issueList, likedImages);
-          return refined || url;
-        } catch (e) {
-          console.error("strictMode vision QA", e);
-          return url;
-        }
-      })
-    );
+    const runStrict = async (url: string): Promise<string> => {
+      try {
+        const { pass, issues } = await visionCheckFusionOutput(ai, sources, url);
+        if (pass) return url;
+        const issueList = issues.length ? issues : ["Scene or identity coherence failed automated vision check"];
+        const refined = await refineFusionAfterVision(ai, model, settings, sources, url, issueList, likedImages);
+        return refined || url;
+      } catch (e) {
+        console.error("strictMode vision QA", e);
+        return url;
+      }
+    };
+    const strictOut: string[] = [];
+    for (let i = 0; i < results.length; i += STRICT_VISION_CONCURRENCY) {
+      const chunk = results.slice(i, i + STRICT_VISION_CONCURRENCY);
+      strictOut.push(...(await Promise.all(chunk.map(runStrict))));
+    }
+    results = strictOut;
   }
 
   return results;
