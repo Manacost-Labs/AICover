@@ -45,7 +45,8 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
       setFormImage(null);
       setShowForm(false);
     } catch (e: unknown) {
-      setSaveError(formatSupabaseClientError(e) || 'Ошибка сохранения');
+      const msg = formatSupabaseClientError(e).trim() || 'Ошибка сохранения';
+      setSaveError(msg);
     }
   };
 

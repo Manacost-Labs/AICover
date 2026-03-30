@@ -54,7 +54,26 @@ export const isSupabaseConfigured = !!supabase;
 
 /** User-facing text for PostgREST / auth errors (e.g. Invalid Compact JWS). */
 export function formatSupabaseClientError(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
+  let raw: string;
+  if (err instanceof Error) {
+    raw = err.message;
+  } else if (err && typeof err === 'object') {
+    const o = err as Record<string, unknown>;
+    if (typeof o.message === 'string' && o.message.length > 0) {
+      raw = o.message;
+      if (typeof o.details === 'string' && o.details.trim()) raw += ` — ${o.details.trim()}`;
+      else if (typeof o.hint === 'string' && o.hint.trim()) raw += ` — ${o.hint.trim()}`;
+      if (typeof o.code === 'string' && o.code) raw += ` [${o.code}]`;
+    } else {
+      try {
+        raw = JSON.stringify(err);
+      } catch {
+        raw = 'Неизвестная ошибка';
+      }
+    }
+  } else {
+    raw = String(err ?? '');
+  }
   if (/invalid compact jws|jwt|jws/i.test(raw)) {
     return 'Ключ anon public повреждён или обрезан: откройте Supabase → Project Settings → API, скопируйте ключ полностью (одна строка, начинается с eyJ…), в Vercel вставьте без кавычек и переносов строк, затем Redeploy.';
   }
