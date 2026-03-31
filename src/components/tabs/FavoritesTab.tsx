@@ -1,6 +1,7 @@
-import React from 'react';
-import { motion } from 'motion/react';
-import { Image as ImageIcon, Loader2, Sparkles } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { AnimatePresence, motion } from 'motion/react';
+import { Image as ImageIcon, Loader2, Sparkles, X } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
 
 interface FavoritesTabProps {
@@ -51,7 +52,24 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
   setFullscreenImage,
   onRefine
 }) => {
+  const [choiceNoteModalUrl, setChoiceNoteModalUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!choiceNoteModalUrl) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setChoiceNoteModalUrl(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [choiceNoteModalUrl]);
+
   return (
+    <>
     <motion.div 
       key="favorites"
       initial={{ opacity: 0, y: 20 }}
@@ -91,15 +109,17 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
                 </div>
               )}
               {favoriteChoiceNotes[url] && favoriteAnalysisLoadingUrl !== url && (
-                <div className="rounded-2xl border border-white/10 bg-zinc-900/60 p-4 space-y-2">
-                  <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-indigo-400">
-                    <Sparkles className="w-3.5 h-3.5" />
+                <button
+                  type="button"
+                  onClick={() => setChoiceNoteModalUrl(url)}
+                  className="w-full rounded-2xl border border-white/10 bg-zinc-900/60 px-4 py-3 flex items-center gap-2 text-left hover:bg-zinc-800/50 transition-colors"
+                >
+                  <Sparkles className="w-3.5 h-3.5 shrink-0 text-indigo-400" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-indigo-400">
                     Почему этот кадр
-                  </div>
-                  <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap font-medium">
-                    {formatFavoriteChoiceNote(favoriteChoiceNotes[url])}
-                  </p>
-                </div>
+                  </span>
+                  <span className="ml-auto text-[10px] font-bold text-zinc-500">Открыть</span>
+                </button>
               )}
             </div>
           ))}
@@ -114,5 +134,54 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
         </div>
       )}
     </motion.div>
+
+    {createPortal(
+      <AnimatePresence>
+        {choiceNoteModalUrl && favoriteChoiceNotes[choiceNoteModalUrl] && (
+          <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="favorite-choice-note-title"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-zinc-950/90 backdrop-blur-md"
+            onClick={() => setChoiceNoteModalUrl(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-lg max-h-[85vh] overflow-hidden flex flex-col bg-zinc-900 border border-white/10 rounded-[2rem] shadow-2xl"
+            >
+              <div className="flex items-center justify-between gap-4 p-6 border-b border-white/5 shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Sparkles className="w-4 h-4 shrink-0 text-indigo-400" />
+                  <h3 id="favorite-choice-note-title" className="text-sm font-black uppercase tracking-widest text-indigo-400 truncate">
+                    Почему этот кадр
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setChoiceNoteModalUrl(null)}
+                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 shrink-0"
+                  aria-label="Закрыть"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto flex-1 min-h-0">
+                <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap font-medium">
+                  {formatFavoriteChoiceNote(favoriteChoiceNotes[choiceNoteModalUrl])}
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>,
+      document.body
+    )}
+    </>
   );
 };
