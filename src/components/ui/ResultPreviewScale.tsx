@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { ZoomIn } from 'lucide-react';
 
 /** Совместимо с префиксом fusion_ в IDB — единый масштаб превью на всех вкладках */
@@ -25,6 +25,15 @@ function readStoredPct(): number {
     return Number.isFinite(n) ? clampPreviewScalePct(n) : PREVIEW_SCALE_DEFAULT;
   } catch {
     return PREVIEW_SCALE_DEFAULT;
+  }
+}
+
+function supportsCssZoom(): boolean {
+  if (typeof CSS === 'undefined' || typeof CSS.supports !== 'function') return false;
+  try {
+    return CSS.supports('zoom', '1');
+  } catch {
+    return false;
   }
 }
 
@@ -83,19 +92,77 @@ export const PreviewScaleSlider: React.FC<{
   </div>
 );
 
+/**
+ * Масштабирование превью без «разъезда» вёрстки:
+ * - предпочтительно `zoom` — меняет и отрисовку, и занимаемое место в потоке;
+ * - иначе `transform` + резерв высоты по getBoundingClientRect (учитывает transform).
+ */
 export const ScaledResultGrid: React.FC<{
   scale: number;
   children: React.ReactNode;
   className?: string;
-}> = ({ scale, children, className = '' }) => (
-  <div
-    className={`mx-auto w-full transition-[transform,width] duration-200 ease-out will-change-transform ${className}`}
-    style={{
-      width: `${100 / scale}%`,
-      transform: `scale(${scale})`,
-      transformOrigin: 'top center',
-    }}
-  >
-    {children}
-  </div>
-);
+}> = ({ scale, children, className = '' }) => {
+  const useZoom = supportsCssZoom();
+  const innerRef = useRef<HTMLDivElement>(null);
+  const [layoutHeight, setLayoutHeight] = useState<number | undefined>(undefined);
+
+  const syncHeight = useCallback(() => {
+    const el = innerRef.current;
+    if (!el) return;
+    const h = el.getBoundingClientRect().height;
+    if (h > 0) setLayoutHeight(h);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (useZoom) return;
+    const el = innerRef.current;
+    if (!el) return;
+    syncHeight();
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(syncHeight);
+    });
+    ro.observe(el);
+    window.addEventListener('resize', syncHeight);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', syncHeight);
+    };
+  }, [useZoom, scale, syncHeight]);
+
+  if (useZoom) {
+    return (
+      <div
+        className={`w-full ${className}`}
+        style={{
+          zoom: scale,
+          transition: 'zoom 0.2s cubic-bezier(0.25, 0.1, 0.25, 1)',
+        }}
+      >
+        {children}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`w-full ${className}`}
+      style={
+        layoutHeight != null
+          ? { minHeight: layoutHeight, transition: 'min-height 0.2s ease-out' }
+          : undefined
+      }
+    >
+      <div
+        ref={innerRef}
+        className="mx-auto w-full origin-top transition-[transform,width] duration-200 ease-out"
+        style={{
+          width: `${100 / scale}%`,
+          transform: `scale(${scale})`,
+          transformOrigin: 'top center',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+};
