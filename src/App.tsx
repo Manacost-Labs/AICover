@@ -1074,6 +1074,26 @@ function AppContent() {
     setVideoProgressPercent(0);
   };
 
+  const handleClearVideoFields = () => {
+    if (isVideoGenerating) {
+      cancelVideoGenRef.current = true;
+      videoGenAbortRef.current?.abort();
+      setIsVideoGenerating(false);
+      setVideoProgressPhase(null);
+      setVideoProgressPercent(0);
+    }
+    setVideoSource(null);
+    setVeoSettings({
+      model: 'veo-3.1-generate-preview',
+      aspectRatio: '16:9',
+      resolution: '1080p',
+      extraPrompt: '',
+      batchSize: 1,
+    });
+    setVideoResults([]);
+    setError(null);
+  };
+
   const handleSaveCard = React.useCallback(async (name: string, cardId: string, imageData: string, mimeType: string) => {
     setIsSavingCard(true);
     try {
@@ -1886,6 +1906,7 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
               videoProgressPercent={videoProgressPercent}
               onGenerate={handleGenerateVideo}
               onCancel={handleCancelVideoGeneration}
+              onClearAllFields={handleClearVideoFields}
               videoResults={videoResults}
               likedVideoSet={likedVideoSet}
               toggleVideoLike={toggleVideoLike}

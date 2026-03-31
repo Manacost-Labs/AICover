@@ -1,9 +1,17 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Cover";
+  src: url("/fonts/cover-display.otf") format("opentype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Space Grotesk", sans-serif;
+  --font-sans: "Cover", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Cover", "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
 :root {
@@ -14,7 +22,6 @@ body {
   background-color: #09090b;
 }
 
-/* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
 }

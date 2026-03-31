@@ -1,6 +1,6 @@
 import React, { useRef, useState } from "react";
 import { motion } from "motion/react";
-import { Film, ImageIcon, Loader2, Sparkles, Upload, X } from "lucide-react";
+import { Eraser, Film, ImageIcon, Loader2, Sparkles, Upload, X } from "lucide-react";
 import type { ImageSource } from "../../services/geminiService";
 import {
   VEO_MODELS,
@@ -32,6 +32,8 @@ interface VideoTabProps {
   videoProgressPercent: number;
   onGenerate: () => void;
   onCancel: () => void;
+  /** Сброс исходника, параметров Veo, доп. промпта и превью результата на вкладке. */
+  onClearAllFields: () => void;
   videoResults: string[];
   likedVideoSet: Set<string>;
   toggleVideoLike: (url: string) => Promise<void>;
@@ -58,6 +60,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
   videoProgressPercent,
   onGenerate,
   onCancel,
+  onClearAllFields,
   videoResults,
   likedVideoSet,
   toggleVideoLike,
@@ -123,14 +126,25 @@ export const VideoTab: React.FC<VideoTabProps> = ({
       className="grid grid-cols-1 lg:grid-cols-12 gap-10"
     >
       <div className="lg:col-span-4 space-y-8">
-        <div>
-          <h2 className="text-4xl font-black tracking-tighter text-white flex items-center gap-3">
-            <Film className="w-10 h-10 text-indigo-400" />
-            Видео
-          </h2>
-          <p className="text-zinc-500 mt-2">
-            Анимация кадра через Veo (image-to-video). Базовый промпт задаёт мягкое движение и зацикливание — дополните при необходимости.
-          </p>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h2 className="text-4xl font-black tracking-tighter text-white flex items-center gap-3">
+              <Film className="w-10 h-10 text-indigo-400 shrink-0" />
+              Видео
+            </h2>
+            <p className="text-zinc-500 mt-2">
+              Анимация кадра через Veo (image-to-video). Базовый промпт задаёт мягкое движение и зацикливание — дополните при необходимости.
+            </p>
+          </div>
+          <button
+            id="veo-clear-all-fields"
+            type="button"
+            onClick={onClearAllFields}
+            className="shrink-0 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full text-sm font-bold border border-white/10 bg-zinc-900/80 text-zinc-400 hover:text-white hover:border-white/20 hover:bg-zinc-800 transition-colors"
+          >
+            <Eraser className="w-4 h-4" />
+            Очистить поля
+          </button>
         </div>
 
         <section id="veo-section-source-image" className="space-y-4 scroll-mt-24">
