@@ -1,4 +1,4 @@
-﻿import { GoogleGenAI, VideoCompressionQuality } from "@google/genai";
+import { GoogleGenAI, VideoCompressionQuality } from "@google/genai";
 import type { ImageSource } from "./geminiService";
 
 export type VeoProgressPhase = "submitting" | "polling" | "finalizing";
@@ -9,7 +9,6 @@ export interface VeoGenerateOptions {
   resolution: string;
   durationSeconds?: number;
   compression: "optimized" | "lossless";
-  generateAudio?: boolean;
   extraPrompt?: string;
 }
 
@@ -64,7 +63,6 @@ export async function generateVeoVideoFromImage(
       durationSeconds: options.durationSeconds ?? 8,
       numberOfVideos: 1,
       compressionQuality: compressionEnum(options.compression),
-      generateAudio: options.generateAudio ?? false,
     },
   });
 

@@ -1027,7 +1027,6 @@ function AppContent() {
           resolution: veoSettings.resolution,
           compression: veoSettings.compression,
           extraPrompt: veoSettings.extraPrompt,
-          generateAudio: false,
         },
         (ph) => setVideoProgressPhase(ph),
         undefined

@@ -1,4 +1,4 @@
-﻿import React, { useRef } from "react";
+import React, { useRef, useState } from "react";
 import { motion } from "motion/react";
 import { Film, ImageIcon, Loader2, Sparkles, Upload, X } from "lucide-react";
 import type { ImageSource } from "../../services/geminiService";
@@ -63,13 +63,50 @@ export const VideoTab: React.FC<VideoTabProps> = ({
   error,
 }) => {
   const fileRef = useRef<HTMLInputElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const applyImageFile = async (file: File | undefined) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const data = await readFileAsDataURL(file);
+    setSourceImage({ data, mimeType: file.type });
+  };
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     e.target.value = "";
-    if (!f || !f.type.startsWith("image/")) return;
-    const data = await readFileAsDataURL(f);
-    setSourceImage({ data, mimeType: f.type });
+    await applyImageFile(f);
+  };
+
+  const onDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = e.currentTarget as HTMLElement;
+    const rect = el.getBoundingClientRect();
+    const { clientX, clientY } = e;
+    if (clientX < rect.left || clientX >= rect.right || clientY < rect.top || clientY >= rect.bottom) {
+      setIsDragging(false);
+    }
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+    setIsDragging(true);
+  };
+
+  const onDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    await applyImageFile(file);
   };
 
   const canRun = !!sourceImage && !isGenerating;
@@ -97,12 +134,26 @@ export const VideoTab: React.FC<VideoTabProps> = ({
           <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Исходное изображение</h3>
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFile} />
           {sourceImage ? (
-            <div className="relative rounded-[2rem] overflow-hidden border border-white/10 aspect-video bg-zinc-900">
+            <div
+              className={`relative rounded-[2rem] overflow-hidden border aspect-video bg-zinc-900 transition-colors ${
+                isDragging ? "border-indigo-500 border-2 ring-2 ring-indigo-500/30" : "border-white/10"
+              }`}
+              onDragEnter={onDragEnter}
+              onDragLeave={onDragLeave}
+              onDragOver={onDragOver}
+              onDrop={onDrop}
+            >
               <OptimizedImage src={sourceImage.data} alt="" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+              {isDragging && (
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-zinc-950/60 backdrop-blur-sm pointer-events-none">
+                  <Upload className="w-10 h-10 text-indigo-400" />
+                  <span className="text-sm font-bold text-white">Отпустите, чтобы заменить кадр</span>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() => setSourceImage(null)}
-                className="absolute top-3 right-3 p-2 rounded-xl bg-red-500/90 text-white"
+                className="absolute top-3 right-3 p-2 rounded-xl bg-red-500/90 text-white z-20"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -111,10 +162,19 @@ export const VideoTab: React.FC<VideoTabProps> = ({
             <button
               type="button"
               onClick={() => fileRef.current?.click()}
-              className="w-full aspect-video rounded-[2rem] border-2 border-dashed border-white/10 flex flex-col items-center justify-center gap-2 text-zinc-500 hover:border-indigo-500/40 hover:text-indigo-300 transition-colors"
+              onDragEnter={onDragEnter}
+              onDragLeave={onDragLeave}
+              onDragOver={onDragOver}
+              onDrop={onDrop}
+              className={`w-full aspect-video rounded-[2rem] border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-colors ${
+                isDragging
+                  ? "border-indigo-500 bg-indigo-500/10 text-indigo-200 ring-2 ring-indigo-500/30"
+                  : "border-white/10 text-zinc-500 hover:border-indigo-500/40 hover:text-indigo-300"
+              }`}
             >
               <Upload className="w-8 h-8" />
-              <span className="text-sm font-bold">Загрузить картинку</span>
+              <span className="text-sm font-bold">Перетащите картинку сюда</span>
+              <span className="text-xs text-zinc-600">или нажмите для выбора файла</span>
             </button>
           )}
         </section>

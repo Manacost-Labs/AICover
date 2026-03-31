@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
-import { Film, Image as ImageIcon, Loader2, Sparkles, X } from 'lucide-react';
+import { Film, Image as ImageIcon, Layout, Loader2, Sparkles, X } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
 import { VideoResultCard } from '../VideoResultCard';
 
@@ -65,6 +65,7 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
   setFullscreenVideo,
   onRefine
 }) => {
+  const [mediaKind, setMediaKind] = useState<'images' | 'videos'>('images');
   const [choiceNoteModalUrl, setChoiceNoteModalUrl] = useState<string | null>(null);
   const [videoChoiceNoteModalUrl, setVideoChoiceNoteModalUrl] = useState<string | null>(null);
 
@@ -92,17 +93,48 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
-      className="space-y-12"
+      className="space-y-8"
     >
       <div>
         <h2 className="text-4xl font-black tracking-tighter text-white">Избранное</h2>
         <p className="text-zinc-500 mt-2">
           Обложки и видео, которые вам понравились. Для свежих лайков ИИ сравнивает кадр с остальными вариантами батча на вкладке «Создать» или «Видео» и кратко объясняет вероятные причины выбора.
         </p>
+        <div
+          className="mt-5 inline-flex rounded-full bg-zinc-900/80 p-1 border border-white/10 shadow-inner"
+          role="tablist"
+          aria-label="Тип контента"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mediaKind === 'images'}
+            onClick={() => setMediaKind('images')}
+            className={`px-5 py-2 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${
+              mediaKind === 'images' ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-400 hover:text-white'
+            }`}
+          >
+            <Layout className="w-4 h-4" />
+            Изображения
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mediaKind === 'videos'}
+            onClick={() => setMediaKind('videos')}
+            className={`px-5 py-2 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${
+              mediaKind === 'videos' ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-400 hover:text-white'
+            }`}
+          >
+            <Film className="w-4 h-4" />
+            Видео
+          </button>
+        </div>
       </div>
 
+      {mediaKind === 'images' ? (
       <section className="space-y-6">
-        <h3 className="text-xl font-black tracking-tight text-white">Изображения</h3>
+        <h3 className="text-xl font-black tracking-tight text-white">Обложки</h3>
         {likedImages.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {likedImages.map((url, i) => (
@@ -152,9 +184,9 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
           </div>
         )}
       </section>
-
+      ) : (
       <section className="space-y-6">
-        <h3 className="text-xl font-black tracking-tight text-white">Видео</h3>
+        <h3 className="text-xl font-black tracking-tight text-white">Клипы</h3>
         {likedVideos.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {likedVideos.map((url, i) => (
@@ -202,6 +234,7 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
           </div>
         )}
       </section>
+      )}
     </motion.div>
 
     {createPortal(
