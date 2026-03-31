@@ -34,4 +34,7 @@ export const VEO_RESOLUTIONS = [
   { id: "1080p", label: "1080p" },
 ] as const;
 
+/** Параллельных запросов Veo (каждый — отдельное видео). */
+export const VEO_BATCH_SIZES = [1, 2, 3, 4] as const;
+
 export const VEO_DEFAULT_PROMPT = `A detailed fantasy illustration comes to life with minimal motion. Magical particles float slowly upward, fire flickers softly, water surface shimmers with subtle ripples. The composition stays locked — no zoom, no pan. Seamless loop, painterly style preserved.`;

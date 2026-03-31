@@ -59,7 +59,7 @@ import {
 import { ASPECT_RATIOS, RESOLUTIONS, GENERATION_MODELS, MODELS_NO_512PX, VEO_DEFAULT_PROMPT } from './constants';
 import { ImageLightbox } from './components/ImageLightbox';
 import { VideoLightbox } from './components/VideoLightbox';
-import { generateVeoVideoFromImage } from './services/veoService';
+import { generateVeoVideoFromImage, type VeoProgressUpdate } from './services/veoService';
 import { videoUrlToFirstFrameSource } from './lib/videoFrame';
 
 const CreateTab = React.lazy(() =>
@@ -218,14 +218,17 @@ function AppContent() {
     aspectRatio: '16:9',
     resolution: '1080p',
     extraPrompt: '',
+    batchSize: 1 as 1 | 2 | 3 | 4,
   });
   const [videoResults, setVideoResults] = useState<string[]>([]);
   const [isVideoGenerating, setIsVideoGenerating] = useState(false);
   const [videoProgressPhase, setVideoProgressPhase] = useState<
     'submitting' | 'polling' | 'finalizing' | null
   >(null);
+  const [videoProgressPercent, setVideoProgressPercent] = useState(0);
   const [fullscreenVideo, setFullscreenVideo] = useState<string | null>(null);
   const cancelVideoGenRef = useRef(false);
+  const videoGenAbortRef = useRef<AbortController | null>(null);
   const videoResultsRef = useRef<string[]>([]);
   const likedVideosRef = useRef<string[]>([]);
   const veoSettingsRef = useRef(veoSettings);
@@ -1015,9 +1018,11 @@ function AppContent() {
     setError(null);
     setIsVideoGenerating(true);
     cancelVideoGenRef.current = false;
+    videoGenAbortRef.current = new AbortController();
     setVideoProgressPhase('submitting');
+    setVideoProgressPercent(0);
     try {
-      const dataUrl = await generateVeoVideoFromImage(
+      const urls = await generateVeoVideoFromImage(
         videoSource,
         VEO_DEFAULT_PROMPT,
         {
@@ -1025,34 +1030,48 @@ function AppContent() {
           aspectRatio: veoSettings.aspectRatio,
           resolution: veoSettings.resolution,
           extraPrompt: veoSettings.extraPrompt,
+          batchSize: veoSettings.batchSize,
         },
-        (ph) => setVideoProgressPhase(ph),
-        undefined
+        (u: VeoProgressUpdate) => {
+          setVideoProgressPhase(u.phase);
+          setVideoProgressPercent(u.percent);
+        },
+        videoGenAbortRef.current.signal
       );
       if (cancelVideoGenRef.current) return;
-      setVideoResults([dataUrl]);
-      videoResultsRef.current = [dataUrl];
+      setVideoResults(urls);
+      videoResultsRef.current = urls;
       setVideoHistory((prev) => {
-        const vh = [dataUrl, ...prev].slice(0, 50);
+        const vh = [...urls, ...prev].slice(0, 50);
         void set('fusion_video_history', vh);
         return vh;
       });
-      if (isSupabaseConfigured) saveVideoToHistory(dataUrl).catch(() => {});
+      if (isSupabaseConfigured) {
+        for (const u of urls) saveVideoToHistory(u).catch(() => {});
+      }
     } catch (err: unknown) {
       if (cancelVideoGenRef.current) return;
+      const aborted =
+        err instanceof Error &&
+        (err.name === 'AbortError' || err.message === 'Отменено');
+      if (aborted) return;
       console.error(err);
       const msg = err instanceof Error ? err.message : 'Ошибка генерации видео';
       setError(msg);
     } finally {
+      videoGenAbortRef.current = null;
       setIsVideoGenerating(false);
       setVideoProgressPhase(null);
+      setVideoProgressPercent(0);
     }
   };
 
   const handleCancelVideoGeneration = () => {
     cancelVideoGenRef.current = true;
+    videoGenAbortRef.current?.abort();
     setIsVideoGenerating(false);
     setVideoProgressPhase(null);
+    setVideoProgressPercent(0);
   };
 
   const handleSaveCard = React.useCallback(async (name: string, cardId: string, imageData: string, mimeType: string) => {
@@ -1475,10 +1494,10 @@ function AppContent() {
         {isVideoGenerating && videoProgressPhase && (
           <div className="relative h-1 w-full overflow-hidden bg-zinc-900 border-t border-white/5">
             <motion.div
-              className="absolute top-0 h-full w-[40%] rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 shadow-[0_0_12px_rgba(139,92,246,0.5)]"
-              initial={{ left: '-40%' }}
-              animate={{ left: ['-40%', '100%'] }}
-              transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
+              className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 shadow-[0_0_12px_rgba(139,92,246,0.5)]"
+              initial={{ width: '0%' }}
+              animate={{ width: `${Math.min(100, Math.max(0, videoProgressPercent))}%` }}
+              transition={{ duration: 0.25, ease: 'easeOut' }}
             />
           </div>
         )}
@@ -1864,6 +1883,7 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
               setVeoSettings={setVeoSettings}
               isGenerating={isVideoGenerating}
               videoProgressPhase={videoProgressPhase}
+              videoProgressPercent={videoProgressPercent}
               onGenerate={handleGenerateVideo}
               onCancel={handleCancelVideoGeneration}
               videoResults={videoResults}

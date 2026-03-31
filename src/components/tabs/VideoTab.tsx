@@ -6,6 +6,7 @@ import {
   VEO_MODELS,
   VEO_ASPECT_RATIOS,
   VEO_RESOLUTIONS,
+  VEO_BATCH_SIZES,
   VEO_DEFAULT_PROMPT,
 } from "../../constants";
 import { OptimizedImage } from "../OptimizedImage";
@@ -17,6 +18,7 @@ export interface VeoSettingsState {
   aspectRatio: string;
   resolution: string;
   extraPrompt: string;
+  batchSize: 1 | 2 | 3 | 4;
 }
 
 interface VideoTabProps {
@@ -26,6 +28,8 @@ interface VideoTabProps {
   setVeoSettings: React.Dispatch<React.SetStateAction<VeoSettingsState>>;
   isGenerating: boolean;
   videoProgressPhase: VeoProgressPhase | null;
+  /** 0–100, ширина полосы в колонке «Результат» */
+  videoProgressPercent: number;
   onGenerate: () => void;
   onCancel: () => void;
   videoResults: string[];
@@ -51,6 +55,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
   setVeoSettings,
   isGenerating,
   videoProgressPhase,
+  videoProgressPercent,
   onGenerate,
   onCancel,
   videoResults,
@@ -249,6 +254,26 @@ export const VideoTab: React.FC<VideoTabProps> = ({
               ))}
             </div>
           </div>
+          <div id="veo-section-batch" className="space-y-2">
+            <span className="text-[10px] font-bold text-zinc-500 uppercase">Параллельно (кол-во роликов)</span>
+            <p className="text-[11px] text-zinc-600 leading-snug">
+              Несколько отдельных запросов к Veo одновременно — быстрее по времени ожидания, чем по очереди.
+            </p>
+            <div className="flex gap-2 flex-wrap">
+              {VEO_BATCH_SIZES.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setVeoSettings((s) => ({ ...s, batchSize: n }))}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
+                    veoSettings.batchSize === n ? "bg-violet-600 text-white" : "bg-white/5 text-zinc-400"
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
         </section>
 
         {error && (
@@ -266,36 +291,50 @@ export const VideoTab: React.FC<VideoTabProps> = ({
             Создать видео
           </button>
           {isGenerating && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400 text-center">
-                {videoProgressPhase === "submitting" && "Отправка…"}
-                {videoProgressPhase === "polling" && "Генерация Veo (долго)…"}
-                {videoProgressPhase === "finalizing" && "Финализация…"}
-                {!videoProgressPhase && "Подождите…"}
-              </p>
-              <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                <motion.div
-                  className="h-full bg-indigo-500"
-                  animate={{ width: videoProgressPhase === "polling" ? ["30%", "70%", "40%"] : "100%" }}
-                  transition={{ duration: videoProgressPhase === "polling" ? 2 : 0.3, repeat: videoProgressPhase === "polling" ? Infinity : 0 }}
-                />
-              </div>
-              <button type="button" onClick={onCancel} className="text-xs text-zinc-500 hover:text-white w-full py-2">
-                Отмена
-              </button>
-            </div>
+            <button type="button" onClick={onCancel} className="text-xs text-zinc-500 hover:text-white w-full py-2">
+              Отменить генерацию
+            </button>
           )}
         </div>
       </div>
 
       <div id="veo-section-result" className="lg:col-span-8 space-y-6 scroll-mt-24">
         <h3 className="text-xl font-black text-white">Результат</h3>
+
+        {isGenerating && (
+          <div
+            id="veo-generation-progress"
+            className="rounded-[2rem] border border-violet-500/25 bg-zinc-900/80 p-8 shadow-[0_0_40px_rgba(139,92,246,0.12)]"
+          >
+            <div className="flex items-end justify-between gap-4 mb-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-violet-400">Генерация</p>
+                <p className="text-sm text-zinc-400 mt-1">
+                  {videoProgressPhase === "submitting" && "Отправка запроса…"}
+                  {videoProgressPhase === "polling" && "Veo обрабатывает (параллельные задачи учитываются в среднем %)…"}
+                  {videoProgressPhase === "finalizing" && "Сборка файла…"}
+                  {!videoProgressPhase && "Подождите…"}
+                </p>
+              </div>
+              <span className="text-3xl font-black tabular-nums text-white">{Math.round(videoProgressPercent)}%</span>
+            </div>
+            <div className="h-4 rounded-full bg-zinc-800 overflow-hidden border border-white/5">
+              <motion.div
+                className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500"
+                initial={false}
+                animate={{ width: `${Math.min(100, Math.max(0, videoProgressPercent))}%` }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+              />
+            </div>
+          </div>
+        )}
+
         {videoResults.length === 0 && !isGenerating ? (
           <div className="h-[400px] flex flex-col items-center justify-center rounded-[3rem] border border-white/5 bg-zinc-900/40">
             <ImageIcon className="w-16 h-16 text-zinc-700 mb-4" />
-            <p className="text-zinc-500 text-center max-w-sm">Здесь появится клип после генерации.</p>
+            <p className="text-zinc-500 text-center max-w-sm">Здесь появятся клипы после генерации.</p>
           </div>
-        ) : (
+        ) : videoResults.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {videoResults.map((url, i) => (
               <VideoResultCard
@@ -313,7 +352,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
               />
             ))}
           </div>
-        )}
+        ) : null}
       </div>
     </motion.div>
   );
