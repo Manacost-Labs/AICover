@@ -151,13 +151,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   const [sceneDragOverRole, setSceneDragOverRole] = React.useState<SceneRole | null>(null);
 
   return (
-    <motion.div
-      key="create"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="grid grid-cols-1 lg:grid-cols-12 gap-10"
-    >
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
       {/* Left Column: Controls */}
       <div className="lg:col-span-4 space-y-10">
           {/* Source Images */}
@@ -785,6 +779,6 @@ export const CreateTab: React.FC<CreateTabProps> = ({
             ))}
           </div>
         </div>
-    </motion.div>
+    </div>
   );
 };

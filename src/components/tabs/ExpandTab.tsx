@@ -56,12 +56,7 @@ export const ExpandTab: React.FC<ExpandTabProps> = ({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="max-w-4xl mx-auto space-y-12"
-    >
+    <div className="max-w-4xl mx-auto space-y-12">
       <section className="space-y-6 text-center">
         <h2 className="text-3xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-b from-white to-zinc-500">
           Изменение формата (Expansion)
@@ -253,6 +248,6 @@ export const ExpandTab: React.FC<ExpandTabProps> = ({
           </div>
         </section>
       )}
-    </motion.div>
+    </div>
   );
 };

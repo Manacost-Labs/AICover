@@ -68,13 +68,7 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
     : null;
 
   return (
-    <motion.div
-      key="references"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="space-y-10"
-    >
+    <div className="space-y-10">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-4xl font-black tracking-tighter text-white">Референсы</h2>
@@ -247,6 +241,6 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
           Пока нет сохранённых референсов
         </div>
       )}
-    </motion.div>
+    </div>
   );
 };

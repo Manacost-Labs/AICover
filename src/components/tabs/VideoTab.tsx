@@ -11,6 +11,7 @@ import {
 } from "../../constants";
 import { OptimizedImage } from "../OptimizedImage";
 import { VideoResultCard } from "../VideoResultCard";
+import { CollapsibleSection } from "../ui/CollapsibleSection";
 import type { VeoProgressPhase } from "../../services/veoService";
 
 export interface VeoSettingsState {
@@ -117,14 +118,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
   const canRun = !!sourceImage && !isGenerating;
 
   return (
-    <motion.div
-      key="video"
-      id="video-tab"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="grid grid-cols-1 lg:grid-cols-12 gap-10"
-    >
+    <div id="video-tab" className="grid grid-cols-1 lg:grid-cols-12 gap-10">
       <div className="lg:col-span-4 space-y-8">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
@@ -198,9 +192,15 @@ export const VideoTab: React.FC<VideoTabProps> = ({
 
         <section id="veo-section-prompt" className="space-y-6 bg-zinc-900/50 p-6 rounded-[2rem] border border-white/5 scroll-mt-24">
           <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Промпт</h3>
-          <div className="text-xs text-zinc-400 leading-relaxed whitespace-pre-wrap rounded-xl bg-black/20 p-4 border border-white/5 max-h-32 overflow-y-auto">
-            {VEO_DEFAULT_PROMPT}
-          </div>
+          <CollapsibleSection
+            title="Базовый промпт Veo"
+            description="Текст по умолчанию к каждому запросу — разверните, чтобы прочитать или скопировать."
+            defaultOpen={false}
+          >
+            <div className="text-xs text-zinc-400 leading-relaxed whitespace-pre-wrap rounded-xl bg-black/20 p-4 border border-white/5 max-h-48 overflow-y-auto">
+              {VEO_DEFAULT_PROMPT}
+            </div>
+          </CollapsibleSection>
           <div className="space-y-2">
             <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Дополнение (необязательно)</label>
             <textarea
@@ -368,6 +368,6 @@ export const VideoTab: React.FC<VideoTabProps> = ({
           </div>
         ) : null}
       </div>
-    </motion.div>
+    </div>
   );
 };

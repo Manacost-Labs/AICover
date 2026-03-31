@@ -61,13 +61,7 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
   };
 
   return (
-    <motion.div
-      key="library"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="space-y-10"
-    >
+    <div className="space-y-10">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -278,6 +272,6 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
           </div>
         )
       )}
-    </motion.div>
+    </div>
   );
 };

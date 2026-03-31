@@ -88,13 +88,7 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
 
   return (
     <>
-    <motion.div 
-      key="favorites"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="space-y-8"
-    >
+    <div className="space-y-8">
       <div>
         <h2 className="text-4xl font-black tracking-tighter text-white">Избранное</h2>
         <p className="text-zinc-500 mt-2">
@@ -235,7 +229,7 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
         )}
       </section>
       )}
-    </motion.div>
+    </div>
 
     {createPortal(
       <AnimatePresence>

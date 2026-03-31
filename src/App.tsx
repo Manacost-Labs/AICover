@@ -1821,18 +1821,20 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
       </AnimatePresence>
 
       <main className="max-w-7xl mx-auto p-6 relative z-10">
-        <AnimatePresence mode="wait">
+        <AnimatePresence>
           {(isUpscaling && (activeTab === 'history' || activeTab === 'favorites')) && (
-            <motion.div 
+            <motion.div
+              key="upscale-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
               className="fixed inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-6"
             >
               <div className="relative">
-                <motion.div 
+                <motion.div
                   animate={{ rotate: 360 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                  transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
                   className="w-20 h-20 border-4 border-white/10 border-t-indigo-500 rounded-full"
                 />
                 <div className="absolute inset-0 flex items-center justify-center">
@@ -1845,14 +1847,24 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
               </div>
             </motion.div>
           )}
+        </AnimatePresence>
 
-          <Suspense
-            fallback={
-              <div className="flex min-h-[50vh] w-full items-center justify-center py-24" role="status" aria-label="Загрузка">
-                <Loader2 className="h-9 w-9 animate-spin text-zinc-500" />
-              </div>
-            }
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+            className="w-full"
           >
+            <Suspense
+              fallback={
+                <div className="flex min-h-[50vh] w-full items-center justify-center py-24" role="status" aria-label="Загрузка">
+                  <Loader2 className="h-9 w-9 animate-spin text-zinc-500" />
+                </div>
+              }
+            >
           {activeTab === 'upscale' ? (
             <UpscaleTab 
               key="upscale"
@@ -2036,7 +2048,8 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
               isSaving={isSavingReference}
             />
           ) : null}
-          </Suspense>
+            </Suspense>
+          </motion.div>
         </AnimatePresence>
       </main>
 

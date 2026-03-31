@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { motion } from 'motion/react';
 import { Film, Layout } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
 import { VideoResultCard } from '../VideoResultCard';
@@ -46,13 +45,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
   };
 
   return (
-    <motion.div 
-      key="history"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="space-y-8"
-    >
+    <div className="space-y-8">
       <div>
         <h2 className="text-4xl font-black tracking-tighter text-white">История</h2>
         <p className="text-zinc-500 mt-2">Последние генерации обложек и видео</p>
@@ -173,6 +166,6 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
           )}
         </section>
       )}
-    </motion.div>
+    </div>
   );
 };
