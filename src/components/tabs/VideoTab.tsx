@@ -6,9 +6,7 @@ import {
   VEO_MODELS,
   VEO_ASPECT_RATIOS,
   VEO_RESOLUTIONS,
-  VEO_COMPRESSION_OPTIONS,
   VEO_DEFAULT_PROMPT,
-  type VeoCompressionPreset,
 } from "../../constants";
 import { OptimizedImage } from "../OptimizedImage";
 import { VideoResultCard } from "../VideoResultCard";
@@ -18,7 +16,6 @@ export interface VeoSettingsState {
   model: string;
   aspectRatio: string;
   resolution: string;
-  compression: VeoCompressionPreset;
   extraPrompt: string;
 }
 
@@ -114,6 +111,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
   return (
     <motion.div
       key="video"
+      id="video-tab"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
@@ -130,7 +128,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
           </p>
         </div>
 
-        <section className="space-y-4">
+        <section id="veo-section-source-image" className="space-y-4 scroll-mt-24">
           <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Исходное изображение</h3>
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFile} />
           {sourceImage ? (
@@ -179,7 +177,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
           )}
         </section>
 
-        <section className="space-y-6 bg-zinc-900/50 p-6 rounded-[2rem] border border-white/5">
+        <section id="veo-section-prompt" className="space-y-6 bg-zinc-900/50 p-6 rounded-[2rem] border border-white/5 scroll-mt-24">
           <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Промпт</h3>
           <div className="text-xs text-zinc-400 leading-relaxed whitespace-pre-wrap rounded-xl bg-black/20 p-4 border border-white/5 max-h-32 overflow-y-auto">
             {VEO_DEFAULT_PROMPT}
@@ -196,9 +194,9 @@ export const VideoTab: React.FC<VideoTabProps> = ({
           </div>
         </section>
 
-        <section className="space-y-4 bg-zinc-900/50 p-6 rounded-[2rem] border border-white/5">
+        <section id="veo-section-params" className="space-y-4 bg-zinc-900/50 p-6 rounded-[2rem] border border-white/5 scroll-mt-24">
           <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Параметры Veo</h3>
-          <div className="space-y-2">
+          <div id="veo-section-model" className="space-y-2">
             <span className="text-[10px] font-bold text-zinc-500 uppercase">Модель</span>
             <div className="flex flex-col gap-2">
               {VEO_MODELS.map((m) => (
@@ -217,8 +215,8 @@ export const VideoTab: React.FC<VideoTabProps> = ({
               ))}
             </div>
           </div>
-          <div className="space-y-2">
-            <span className="text-[10px] font-bold text-zinc-500 uppercase">Формат</span>
+          <div id="veo-section-format" className="space-y-2">
+            <span className="text-[10px] font-bold text-zinc-500 uppercase">Формат (соотношение сторон)</span>
             <div className="flex gap-2 flex-wrap">
               {VEO_ASPECT_RATIOS.map((ar) => (
                 <button
@@ -234,7 +232,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
               ))}
             </div>
           </div>
-          <div className="space-y-2">
+          <div id="veo-section-resolution" className="space-y-2">
             <span className="text-[10px] font-bold text-zinc-500 uppercase">Качество (разрешение)</span>
             <div className="flex gap-2 flex-wrap">
               {VEO_RESOLUTIONS.map((r) => (
@@ -247,23 +245,6 @@ export const VideoTab: React.FC<VideoTabProps> = ({
                   }`}
                 >
                   {r.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <span className="text-[10px] font-bold text-zinc-500 uppercase">Сжатие</span>
-            <div className="flex flex-col gap-2">
-              {VEO_COMPRESSION_OPTIONS.map((o) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  onClick={() => setVeoSettings((s) => ({ ...s, compression: o.id }))}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold text-left ${
-                    veoSettings.compression === o.id ? "bg-white text-zinc-950" : "bg-white/5 text-zinc-400"
-                  }`}
-                >
-                  {o.label}
                 </button>
               ))}
             </div>
@@ -307,7 +288,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
         </div>
       </div>
 
-      <div className="lg:col-span-8 space-y-6">
+      <div id="veo-section-result" className="lg:col-span-8 space-y-6 scroll-mt-24">
         <h3 className="text-xl font-black text-white">Результат</h3>
         {videoResults.length === 0 && !isGenerating ? (
           <div className="h-[400px] flex flex-col items-center justify-center rounded-[3rem] border border-white/5 bg-zinc-900/40">

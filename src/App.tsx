@@ -217,7 +217,6 @@ function AppContent() {
     model: 'veo-3.1-generate-preview',
     aspectRatio: '16:9',
     resolution: '1080p',
-    compression: 'optimized' as const,
     extraPrompt: '',
   });
   const [videoResults, setVideoResults] = useState<string[]>([]);
@@ -1025,7 +1024,6 @@ function AppContent() {
           model: veoSettings.model,
           aspectRatio: veoSettings.aspectRatio,
           resolution: veoSettings.resolution,
-          compression: veoSettings.compression,
           extraPrompt: veoSettings.extraPrompt,
         },
         (ph) => setVideoProgressPhase(ph),

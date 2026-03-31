@@ -1,22 +1,19 @@
-import { GoogleGenAI, VideoCompressionQuality } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import type { ImageSource } from "./geminiService";
 
 export type VeoProgressPhase = "submitting" | "polling" | "finalizing";
 
 export interface VeoGenerateOptions {
   model: string;
+  /** Output aspect ratio, e.g. "16:9", "9:16" (Veo-supported values). */
   aspectRatio: string;
+  /** e.g. "720p", "1080p" */
   resolution: string;
   durationSeconds?: number;
-  compression: "optimized" | "lossless";
   extraPrompt?: string;
 }
 
 const POLL_MS = 8000;
-
-function compressionEnum(c: "optimized" | "lossless"): VideoCompressionQuality {
-  return c === "lossless" ? VideoCompressionQuality.LOSSLESS : VideoCompressionQuality.OPTIMIZED;
-}
 
 async function fetchVideoUriToDataUrl(uri: string, apiKey: string): Promise<string> {
   let res = await fetch(uri, { headers: { "x-goog-api-key": apiKey } });
@@ -62,7 +59,6 @@ export async function generateVeoVideoFromImage(
       resolution: options.resolution,
       durationSeconds: options.durationSeconds ?? 8,
       numberOfVideos: 1,
-      compressionQuality: compressionEnum(options.compression),
     },
   });
 
