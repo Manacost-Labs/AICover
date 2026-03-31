@@ -3,6 +3,11 @@ import { Film, Layout } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
 import { VideoResultCard } from '../VideoResultCard';
 import { clearVideoHistory } from '../../services/supabaseService';
+import {
+  PreviewScaleSlider,
+  ScaledResultGrid,
+  useResultPreviewScaleFromStorage,
+} from '../ui/ResultPreviewScale';
 
 interface HistoryTabProps {
   history: string[];
@@ -34,6 +39,8 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
   onRefine
 }) => {
   const [mediaKind, setMediaKind] = useState<'images' | 'videos'>('images');
+  const { pct: previewScalePct, setPct: setPreviewScalePct, scale: previewScale } =
+    useResultPreviewScaleFromStorage();
 
   const clearImageHistory = () => {
     setHistory([]);
@@ -81,6 +88,10 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
         </div>
       </div>
 
+      {(history.length > 0 || videoHistory.length > 0) && (
+        <PreviewScaleSlider value={previewScalePct} onChange={setPreviewScalePct} />
+      )}
+
       {mediaKind === 'images' ? (
         <section className="space-y-6">
           <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -96,25 +107,27 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
           </div>
 
           {history.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {history.map((url, i) => (
-                <ResultCard
-                  key={url}
-                  url={url}
-                  isLiked={likedSet.has(url)} 
-                  onToggleLike={toggleLike} 
-                  onUpscale={handleUpscale} 
-                  onFullscreen={setFullscreenImage} 
-                  onRefine={onRefine}
-                  onDownload={(dlUrl) => {
-                    const link = document.createElement('a');
-                    link.href = dlUrl;
-                    link.download = `history-${i}.png`;
-                    link.click();
-                  }}
-                />
-              ))}
-            </div>
+            <ScaledResultGrid scale={previewScale}>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {history.map((url, i) => (
+                  <ResultCard
+                    key={url}
+                    url={url}
+                    isLiked={likedSet.has(url)} 
+                    onToggleLike={toggleLike} 
+                    onUpscale={handleUpscale} 
+                    onFullscreen={setFullscreenImage} 
+                    onRefine={onRefine}
+                    onDownload={(dlUrl) => {
+                      const link = document.createElement('a');
+                      link.href = dlUrl;
+                      link.download = `history-${i}.png`;
+                      link.click();
+                    }}
+                  />
+                ))}
+              </div>
+            </ScaledResultGrid>
           ) : (
             <div className="h-[min(400px,60vh)] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
               <div className="w-16 h-16 bg-zinc-900 rounded-3xl flex items-center justify-center border border-white/5">
@@ -139,23 +152,25 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
           </div>
 
           {videoHistory.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {videoHistory.map((url, i) => (
-                <VideoResultCard
-                  key={url}
-                  url={url}
-                  isLiked={likedVideoSet.has(url)}
-                  onToggleLike={toggleVideoLike}
-                  onFullscreen={setFullscreenVideo}
-                  onDownload={(dlUrl) => {
-                    const link = document.createElement('a');
-                    link.href = dlUrl;
-                    link.download = `history-video-${i}.mp4`;
-                    link.click();
-                  }}
-                />
-              ))}
-            </div>
+            <ScaledResultGrid scale={previewScale}>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {videoHistory.map((url, i) => (
+                  <VideoResultCard
+                    key={url}
+                    url={url}
+                    isLiked={likedVideoSet.has(url)}
+                    onToggleLike={toggleVideoLike}
+                    onFullscreen={setFullscreenVideo}
+                    onDownload={(dlUrl) => {
+                      const link = document.createElement('a');
+                      link.href = dlUrl;
+                      link.download = `history-video-${i}.mp4`;
+                      link.click();
+                    }}
+                  />
+                ))}
+              </div>
+            </ScaledResultGrid>
           ) : (
             <div className="h-[min(400px,60vh)] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
               <div className="w-16 h-16 bg-zinc-900 rounded-3xl flex items-center justify-center border border-white/5">

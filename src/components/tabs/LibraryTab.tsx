@@ -4,6 +4,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import { BookOpen, Plus, X, Trash2, Upload, Loader2, AlertTriangle } from 'lucide-react';
 import type { CardLibraryEntry } from '../../services/supabaseService';
 import { isSupabaseConfigured, formatSupabaseClientError } from '../../services/supabaseService';
+import {
+  PreviewScaleSlider,
+  ScaledResultGrid,
+  useResultPreviewScaleFromStorage,
+} from '../ui/ResultPreviewScale';
 
 interface LibraryTabProps {
   cardLibrary: CardLibraryEntry[];
@@ -27,6 +32,8 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const { pct: previewScalePct, setPct: setPreviewScalePct, scale: previewScale } =
+    useResultPreviewScaleFromStorage();
 
   const handleFile = (file: File) => {
     if (!file.type.startsWith('image/')) return;
@@ -218,6 +225,9 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
 
       {/* Card grid */}
       {cardLibrary.length > 0 ? (
+        <div className="space-y-4">
+          <PreviewScaleSlider value={previewScalePct} onChange={setPreviewScalePct} />
+          <ScaledResultGrid scale={previewScale}>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 items-start">
           {cardLibrary.map(entry => (
             <motion.div
@@ -250,6 +260,8 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
               </div>
             </motion.div>
           ))}
+        </div>
+          </ScaledResultGrid>
         </div>
       ) : (
         !showForm && (

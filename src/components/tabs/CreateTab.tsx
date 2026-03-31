@@ -21,6 +21,11 @@ import { DeckImportSection } from '../DeckImportSection';
 import { OptimizedImage } from '../OptimizedImage';
 import type { CardLibraryEntry, ReferenceLibraryEntry } from '../../services/supabaseService';
 import { GENERATION_MODELS, MODELS_NO_512PX } from '../../constants';
+import {
+  PreviewScaleSlider,
+  ScaledResultGrid,
+  useResultPreviewScaleFromStorage,
+} from '../ui/ResultPreviewScale';
 
 interface CreateTabProps {
   sources: any[];
@@ -149,6 +154,8 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   const maxCover = 4;
   const maxScene = scenePlan;
   const [sceneDragOverRole, setSceneDragOverRole] = React.useState<SceneRole | null>(null);
+  const { pct: resultPreviewScalePct, setPct: setResultPreviewScalePct, scale: resultPreviewScale } =
+    useResultPreviewScaleFromStorage();
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
@@ -600,6 +607,10 @@ export const CreateTab: React.FC<CreateTabProps> = ({
             scenePlan={scenePlan}
           />
 
+          {results.length > 0 && !isGenerating && (
+            <PreviewScaleSlider value={resultPreviewScalePct} onChange={setResultPreviewScalePct} />
+          )}
+
           <AnimatePresence mode="wait">
             {isGenerating ? (
               <motion.div
@@ -686,29 +697,31 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                 animate={{ opacity: 1 }}
                 className="relative"
               >
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {results.map((url, i) => (
-                    <ResultCard
-                      key={i}
-                      url={url}
-                      isLiked={likedSet.has(url)}
-                      onToggleLike={toggleLike}
-                      onUpscale={handleUpscale}
-                      onFullscreen={setFullscreenImage}
-                      onRefine={(url) => {
-                        setBaseImage({ data: url, mimeType: 'image/png' });
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                        setTimeout(() => promptRef.current?.focus(), 100);
-                      }}
-                      onDownload={(url) => {
-                        const link = document.createElement('a');
-                        link.href = url;
-                        link.download = `cover-${i}.png`;
-                        link.click();
-                      }}
-                    />
-                  ))}
-                </div>
+                <ScaledResultGrid scale={resultPreviewScale}>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {results.map((url, i) => (
+                      <ResultCard
+                        key={i}
+                        url={url}
+                        isLiked={likedSet.has(url)}
+                        onToggleLike={toggleLike}
+                        onUpscale={handleUpscale}
+                        onFullscreen={setFullscreenImage}
+                        onRefine={(url) => {
+                          setBaseImage({ data: url, mimeType: 'image/png' });
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                          setTimeout(() => promptRef.current?.focus(), 100);
+                        }}
+                        onDownload={(url) => {
+                          const link = document.createElement('a');
+                          link.href = url;
+                          link.download = `cover-${i}.png`;
+                          link.click();
+                        }}
+                      />
+                    ))}
+                  </div>
+                </ScaledResultGrid>
 
                 {isUpscaling && (
                   <motion.div
