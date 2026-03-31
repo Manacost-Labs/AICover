@@ -23,6 +23,8 @@ import {
   generateFusedCover,
   ImageSource,
   GenerationSettings,
+  DEFAULT_SYSTEM_PROMPT_CREATE,
+  DEFAULT_SYSTEM_PROMPT_EDIT,
   upscaleImage,
   expandImage,
   analyzeReferenceCompositionVision,
@@ -43,7 +45,7 @@ import {
   type CardLibraryEntry,
   type ReferenceLibraryEntry,
 } from './services/supabaseService';
-import { ASPECT_RATIOS, RESOLUTIONS } from './constants';
+import { ASPECT_RATIOS, RESOLUTIONS, GENERATION_MODELS, MODELS_NO_512PX } from './constants';
 import { ImageLightbox } from './components/ImageLightbox';
 
 const CreateTab = React.lazy(() =>
@@ -244,6 +246,11 @@ function AppContent() {
   const [hasKey, setHasKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'prompt' | 'settings' | 'preview'>('prompt');
+  const [settingsPromptMode, setSettingsPromptMode] = useState<'create' | 'edit'>('create');
+  const [generationProgress, setGenerationProgress] = useState<{ done: number; total: number } | null>(null);
+  const cancelGenerationRef = useRef(false);
+  const [sceneToCoverWarning, setSceneToCoverWarning] = useState(false);
   const [cardLibrary, setCardLibrary] = useState<CardLibraryEntry[]>([]);
   const [referenceLibrary, setReferenceLibrary] = useState<ReferenceLibraryEntry[]>([]);
   const [isSavingCard, setIsSavingCard] = useState(false);
@@ -727,21 +734,29 @@ function AppContent() {
     }
     setError(null);
     setIsGenerating(true);
+    cancelGenerationRef.current = false;
+    setGenerationProgress(settings.batchSize > 1 ? { done: 0, total: settings.batchSize } : null);
     try {
-      const images = await generateFusedCover(ordered, reference, settings, baseImage, likedImages, referenceVisionNotes);
-      setResults(images);
+      const images = await generateFusedCover(
+        ordered, reference, settings, baseImage, likedImages, referenceVisionNotes,
+        settings.batchSize > 1
+          ? (done, total) => setGenerationProgress({ done, total })
+          : undefined
+      );
 
-      const newHistory = [...images, ...history].slice(0, 50);
+      if (cancelGenerationRef.current) return;
+
+      setResults(images);
+      const newHistory = [...images, ...history].slice(0, 100);
       setHistory(newHistory);
-      // Save to IDB immediately (fast)
       await set('fusion_history', newHistory);
-      // Also save to Supabase in background (non-blocking)
       if (isSupabaseConfigured) {
         for (const img of images) {
           saveToHistory(img).catch(() => {});
         }
       }
     } catch (err: any) {
+      if (cancelGenerationRef.current) return;
       console.error(err);
       setError(err.message || "Генерация не удалась. Пожалуйста, попробуйте снова.");
       if (err.message?.includes("Requested entity was not found")) {
@@ -749,14 +764,26 @@ function AppContent() {
       }
     } finally {
       setIsGenerating(false);
+      setGenerationProgress(null);
     }
   };
 
-  const runFavoriteChoiceAnalysis = React.useCallback(async (url: string, favoriteRowId: string | null) => {
+  const handleCancelGeneration = () => {
+    cancelGenerationRef.current = true;
+    setIsGenerating(false);
+    setGenerationProgress(null);
+  };
+
+  const runFavoriteChoiceAnalysis = React.useCallback(async (
+    url: string,
+    favoriteRowId: string | null,
+    batchSnapshot?: string[]
+  ) => {
     setFavoriteAnalysisLoadingUrl(url);
     try {
       const chosen = await imageUrlToImageSource(url);
-      const batch = resultsRef.current;
+      // Use snapshot passed at call-time to avoid stale-ref race condition
+      const batch = batchSnapshot ?? resultsRef.current;
       const siblings = batch.filter(u => u !== url);
       const alternatives: ImageSource[] = [];
       for (const u of siblings.slice(0, 3)) {
@@ -815,7 +842,7 @@ function AppContent() {
         const res = await addToFavorites(url);
         favId = res?.id ?? null;
       }
-      void runFavoriteChoiceAnalysis(url, favId);
+      void runFavoriteChoiceAnalysis(url, favId, resultsRef.current.slice());
     },
     [runFavoriteChoiceAnalysis]
   );
@@ -891,6 +918,10 @@ function AppContent() {
       const response = await fetch(entry.storageUrl);
       const blob = await response.blob();
       const reader = new FileReader();
+      reader.onerror = () => {
+        console.error('Failed to read card art blob');
+        setError('Не удалось прочитать изображение карты.');
+      };
       reader.onloadend = () => {
         const data = reader.result as string;
         const mime = blob.type;
@@ -934,6 +965,9 @@ function AppContent() {
         const sorted = order.map(r => prev.find(s => s.role === r)).filter((x): x is UISource => x != null);
         return sorted.map(({ role: _r, ...rest }) => rest);
       });
+      // Inform user that slot roles were cleared
+      setSceneToCoverWarning(true);
+      setTimeout(() => setSceneToCoverWarning(false), 4000);
     }
     setCreateLayoutMode(mode);
   };
@@ -1188,7 +1222,7 @@ function AppContent() {
         </div>
       </header>
 
-      {/* Settings Panel */}
+      {/* Settings Modal — centered */}
       <AnimatePresence>
         {showSettings && (
           <>
@@ -1197,143 +1231,290 @@ function AppContent() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[90] bg-zinc-950/60 backdrop-blur-sm"
+              className="fixed inset-0 z-[90] bg-zinc-950/80 backdrop-blur-md"
               onClick={() => setShowSettings(false)}
             />
-            {/* Drawer */}
-            <motion.aside
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-              className="fixed top-0 right-0 h-full w-full max-w-lg z-[91] bg-zinc-950 border-l border-white/10 shadow-2xl flex flex-col overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Drawer Header */}
-              <div className="flex items-center justify-between px-8 py-6 border-b border-white/5 shrink-0">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-indigo-500/10 rounded-xl flex items-center justify-center border border-indigo-500/20">
-                    <Settings className="w-4 h-4 text-indigo-400" />
+            {/* Modal */}
+            <div className="fixed inset-0 z-[91] flex items-center justify-center p-4 pointer-events-none">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 16 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96, y: 16 }}
+                transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+                className="w-full max-w-2xl max-h-[90vh] bg-zinc-950 border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden pointer-events-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Modal Header */}
+                <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-indigo-500/10 rounded-xl flex items-center justify-center border border-indigo-500/20">
+                      <Settings className="w-4 h-4 text-indigo-400" />
+                    </div>
+                    <h2 className="text-sm font-black uppercase tracking-widest text-white">Промпт генерации</h2>
                   </div>
-                  <h2 className="text-sm font-black uppercase tracking-widest text-white">Промпт генерации</h2>
-                </div>
-                <button
-                  onClick={() => setShowSettings(false)}
-                  className="p-2 bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white rounded-full transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Drawer Body */}
-              <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6">
-                <p className="text-xs text-zinc-500 leading-relaxed">
-                  Системный промпт, который отправляется в Gemini API при каждой генерации. Ваши настройки автоматически встраиваются в него.
-                </p>
-
-                {/* Mode Badge */}
-                <div className="flex items-center gap-2">
-                  <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${baseImage ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
-                    {baseImage ? '⚡ Режим доработки' : '✨ Режим создания'}
-                  </span>
-                  {settings.strictMode && (
-                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border bg-amber-500/10 text-amber-400 border-amber-500/20">
-                      🔒 Строгий режим
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${baseImage ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
+                      {baseImage ? '⚡ Доработка' : '✨ Создание'}
                     </span>
-                  )}
+                    {settings.strictMode && (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border bg-amber-500/10 text-amber-400 border-amber-500/20">
+                        🔒 Строгий
+                      </span>
+                    )}
+                    <button
+                      onClick={() => setShowSettings(false)}
+                      className="p-2 bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white rounded-full transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
 
-                {/* Russian */}
-                <div className="rounded-2xl overflow-hidden border border-white/5">
-                  <div className="px-4 py-3 bg-blue-500/10 border-b border-white/5 flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-blue-400">🇷🇺 Описание (Русский)</span>
-                  </div>
-                  <pre className="p-5 text-[11px] text-zinc-400 leading-relaxed whitespace-pre-wrap font-mono bg-zinc-950/80 max-h-72 overflow-y-auto scrollbar-thin">{baseImage
-? `ЗАДАЧА: ХИРУРГИЧЕСКАЯ ДОРАБОТКА
-ЦЕЛЬ: Изменить базовое изображение, используя исходного персонажа как фиксированный объект
-ПРАВИЛА:
-1. НУЛЕВОЕ ПЕРЕРИСОВЫВАНИЕ: лицо, волосы, глаза — 100% идентичны источнику
-2. ПИКСЕЛЬНОЕ СОВПАДЕНИЕ: точные силуэты, без новых конечностей и брони
-3. СТИЛЬ: яркая фэнтезийная цифровая живопись (Hearthstone)
-4. ИНТЕГРАЦИЯ: единое освещение, атмосфера, контактные тени
-5. ОСВЕЩЕНИЕ: один доминирующий источник, сильная подсветка контура
-6. ЦВЕТ: соответствие окружающему свету среды
-7. ЗАЗЕМЛЕНИЕ: реалистичные тени, соединённые с ногами
-8. ПРОМПТ: ${settings.prompt ? `ТОЛЬКО: ${settings.prompt}` : 'Улучшить интеграцию'}
-ИСКЛЮЧИТЬ: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}перерисовка, изменение лиц, мутации, лишние конечности, коллаж`
-: `ЗАДАЧА: МАСТЕР-КОМПОЗИТИНГ — СЛИЯНИЕ ПЕРСОНАЖЕЙ
-ПРАВИЛА:
-1. НУЛЕВОЕ ПЕРЕРИСОВЫВАНИЕ: персонажи — неизменяемые объекты
-2. ТОЧНОСТЬ: сохрани каждую деталь (броня, руны, волосы) в точности
-3. СТИЛЬ: яркая фэнтезийная цифровая живопись (Hearthstone)
-4. ОКРУЖЕНИЕ: создай НОВЫЙ фон, дополняющий освещение персонажей
-5. БЕЗ КОЛЛАЖА: единая, цельная, законченная сцена
-6. ОСВЕЩЕНИЕ: один доминирующий источник света
-7. ЗАЗЕМЛЕНИЕ: тени у ног, без парения${settings.prompt ? `\nПОЛЬЗОВАТЕЛЬ: ${settings.prompt}` : ''}
-ИСКЛЮЧИТЬ: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}перерисовка, изменение лиц, мутации, лишние конечности, коллаж`}</pre>
+                {/* Tabs */}
+                <div className="flex border-b border-white/5 shrink-0 px-2">
+                  {([
+                    { id: 'prompt', label: '✏️ Промпт' },
+                    { id: 'settings', label: '⚙️ Настройки' },
+                    { id: 'preview', label: '👁 API Промпт' },
+                  ] as const).map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setSettingsTab(tab.id)}
+                      className={`px-5 py-3 text-xs font-bold uppercase tracking-widest transition-colors border-b-2 -mb-px ${settingsTab === tab.id ? 'border-indigo-400 text-indigo-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
                 </div>
 
-                {/* English */}
-                <div className="rounded-2xl overflow-hidden border border-white/5">
-                  <div className="px-4 py-3 bg-indigo-500/10 border-b border-white/5 flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-indigo-400">🇬🇧 API Prompt (English)</span>
-                  </div>
-                  <pre className="p-5 text-[11px] text-zinc-400 leading-relaxed whitespace-pre-wrap font-mono bg-zinc-950/80 max-h-72 overflow-y-auto scrollbar-thin">{baseImage
-? `TASK: SURGICAL REFINEMENT.
-OBJECTIVE: Modify "BASE IMAGE" using "SOURCE CHARACTER" as FIXED ASSETS.
-RULES:
-1. ZERO REDRAWING: Faces, hair, eyes MUST be 100% identical to source.
-2. PIXEL-PERFECT: Exact silhouettes. No new limbs or armor.
-3. STYLE: VIBRANT FANTASY DIGITAL PAINTING (Hearthstone style).
-4. INTEGRATION: Unified lighting, atmosphere, contact shadows.
-5. LIGHTING: Single dominant light source. Strong rim lighting.
-6. COLOR: Match environment ambient light.
-7. GROUNDING: Realistic shadows connected to feet.
-8. PROMPT: ${settings.prompt ? `ONLY: ${settings.prompt}` : 'Improve integration.'}
-AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing, changing faces, mutation, extra limbs, collage, split-screen`
-: `TASK: MASTER COMPOSITING - FUSE CHARACTERS.
-RULES:
-1. ZERO REDRAWING: Use source characters as immutable assets.
-2. FIDELITY: Preserve every detail (armor, runes, hair) exactly.
-3. STYLE: VIBRANT FANTASY DIGITAL PAINTING (Hearthstone style).
-4. ENVIRONMENT: Generate NEW background complementing characters' lighting.
-5. NO COLLAGE: One seamless, unified scene.
-6. LIGHTING: One dominant light source matching characters.
-7. GROUNDING: Shadows connected to feet. No floating.${settings.prompt ? `\nUSER: ${settings.prompt}` : ''}
-AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing, changing faces, mutation, extra limbs, collage, split-screen`}</pre>
-                </div>
+                {/* Modal Body */}
+                <div className="flex-1 overflow-y-auto">
 
-                {/* Current Settings Summary */}
-                <div className="rounded-2xl border border-white/5 overflow-hidden">
-                  <div className="px-4 py-3 bg-zinc-900 border-b border-white/5">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Текущие настройки</span>
-                  </div>
-                  <div className="p-5 grid grid-cols-2 gap-4">
-                    {[
-                      { label: 'Модель', value: settings.model.replace('gemini-', 'G-').replace('-image-preview', '').replace('-image', '') },
-                      { label: 'Формат', value: settings.aspectRatio },
-                      { label: 'Разрешение', value: settings.imageSize },
-                      { label: 'Вариантов', value: String(settings.batchSize) },
-                    ].map(item => (
-                      <div key={item.label} className="space-y-1">
-                        <div className="text-[9px] font-black uppercase tracking-widest text-zinc-600">{item.label}</div>
-                        <div className="text-xs font-bold text-zinc-300">{item.value}</div>
+                  {/* Tab: Промпт */}
+                  {settingsTab === 'prompt' && (
+                    <div className="p-6 space-y-5">
+                      <p className="text-xs text-zinc-500 leading-relaxed">
+                        Инструкции встраиваются в системный промпт при каждой генерации.
+                      </p>
+
+                      {/* Main prompt */}
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Дополнительный промпт</label>
+                        <textarea
+                          value={settings.prompt}
+                          onChange={e => setSettings((s: any) => ({ ...s, prompt: e.target.value }))}
+                          placeholder="Опишите что хотите видеть на изображении..."
+                          rows={4}
+                          className="w-full bg-zinc-900 border border-white/10 rounded-xl px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:border-indigo-500/50 transition-colors"
+                        />
                       </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
 
-              {/* Drawer Footer */}
-              <div className="px-8 py-5 border-t border-white/5 shrink-0">
-                <button
-                  onClick={() => setShowSettings(false)}
-                  className="w-full py-3 bg-white text-zinc-950 font-black rounded-2xl hover:bg-zinc-100 transition-all text-sm uppercase tracking-widest"
-                >
-                  Закрыть
-                </button>
-              </div>
-            </motion.aside>
+                      {/* Negative prompt */}
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Негативный промпт</label>
+                        <textarea
+                          value={settings.negativePrompt ?? ''}
+                          onChange={e => setSettings((s: any) => ({ ...s, negativePrompt: e.target.value }))}
+                          placeholder="Что исключить из изображения..."
+                          rows={3}
+                          className="w-full bg-zinc-900 border border-white/10 rounded-xl px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:border-red-500/50 transition-colors"
+                        />
+                      </div>
+
+                      {/* Strict mode */}
+                      <div className="flex items-center justify-between p-4 rounded-xl bg-zinc-900 border border-white/5">
+                        <div>
+                          <div className="text-xs font-bold text-zinc-200">Строгий режим</div>
+                          <div className="text-[11px] text-zinc-500 mt-0.5">Vision QA-проверка и refine после генерации</div>
+                        </div>
+                        <button
+                          onClick={() => setSettings((s: any) => ({ ...s, strictMode: !s.strictMode }))}
+                          className={`w-11 h-6 rounded-full transition-all relative shrink-0 ${settings.strictMode ? 'bg-amber-500' : 'bg-zinc-700'}`}
+                        >
+                          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${settings.strictMode ? 'left-5' : 'left-0.5'}`} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tab: Настройки */}
+                  {settingsTab === 'settings' && (
+                    <div className="p-6 space-y-6">
+
+                      {/* Model */}
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Модель</label>
+                        <div className="space-y-2">
+                          {GENERATION_MODELS.map(m => (
+                            <button
+                              key={m.id}
+                              onClick={() => setSettings((s: any) => ({
+                                ...s,
+                                model: m.id,
+                                imageSize: (MODELS_NO_512PX.has(m.id) && s.imageSize === "512px") ? "1K" : s.imageSize
+                              }))}
+                              className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border text-left transition-all ${settings.model === m.id ? 'bg-indigo-500/10 border-indigo-500/30 text-white' : 'bg-zinc-900 border-white/5 text-zinc-400 hover:border-white/10 hover:text-zinc-300'}`}
+                            >
+                              <div>
+                                <div className="text-xs font-bold">{m.name}</div>
+                                <div className="text-[11px] text-zinc-500 mt-0.5">{m.desc}</div>
+                              </div>
+                              {settings.model === m.id && <div className="w-2 h-2 rounded-full bg-indigo-400 shrink-0" />}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Aspect Ratio */}
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Формат (Aspect Ratio)</label>
+                        <div className="flex flex-wrap gap-2">
+                          {ASPECT_RATIOS.map(ratio => (
+                            <button
+                              key={ratio}
+                              onClick={() => setSettings((s: any) => ({ ...s, aspectRatio: ratio as any }))}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${settings.aspectRatio === ratio ? 'bg-white border-white text-zinc-950 shadow-md' : 'bg-zinc-900 border-white/5 text-zinc-400 hover:border-white/10 hover:text-zinc-300'}`}
+                            >
+                              {ratio}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Image Size */}
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Разрешение</label>
+                        <div className="flex gap-2">
+                          {RESOLUTIONS.map(res => {
+                            const isDisabled = MODELS_NO_512PX.has(settings.model) && res === "512px";
+                            return (
+                              <button
+                                key={res}
+                                disabled={isDisabled}
+                                onClick={() => !isDisabled && setSettings((s: any) => ({ ...s, imageSize: res as any }))}
+                                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border ${isDisabled ? 'opacity-40 cursor-not-allowed bg-zinc-900 border-white/5 text-zinc-600' : settings.imageSize === res ? 'bg-white border-white text-zinc-950 shadow-md' : 'bg-zinc-900 border-white/5 text-zinc-400 hover:border-white/10 hover:text-zinc-300'}`}
+                              >
+                                {res}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Batch Size */}
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Вариантов за генерацию</label>
+                        <div className="flex gap-2">
+                          {[1, 2, 3, 4].map(n => (
+                            <button
+                              key={n}
+                              onClick={() => setSettings((s: any) => ({ ...s, batchSize: n }))}
+                              className={`w-12 h-10 rounded-xl text-sm font-bold transition-all border ${settings.batchSize === n ? 'bg-white border-white text-zinc-950 shadow-md' : 'bg-zinc-900 border-white/5 text-zinc-400 hover:border-white/10 hover:text-zinc-300'}`}
+                            >
+                              {n}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tab: API Промпт */}
+                  {settingsTab === 'preview' && (
+                    <div className="p-6 space-y-4">
+
+                      {/* Mode switcher */}
+                      <div className="flex gap-2">
+                        {([
+                          { id: 'create', label: '✨ Режим создания' },
+                          { id: 'edit', label: '⚡ Режим доработки' },
+                        ] as const).map(m => (
+                          <button
+                            key={m.id}
+                            onClick={() => setSettingsPromptMode(m.id)}
+                            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border ${settingsPromptMode === m.id ? 'bg-white border-white text-zinc-950' : 'bg-zinc-900 border-white/5 text-zinc-400 hover:border-white/10 hover:text-zinc-300'}`}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
+                        {((settingsPromptMode === 'create' && settings.customSystemPromptCreate?.trim()) ||
+                          (settingsPromptMode === 'edit' && settings.customSystemPromptEdit?.trim())) && (
+                          <span className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                            ✏️ Изменён
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Info about dynamic blocks */}
+                      <div className="px-4 py-3 rounded-xl bg-amber-500/5 border border-amber-500/15 text-[11px] text-amber-400 leading-relaxed">
+                        <span className="font-bold">Динамические блоки</span> добавляются автоматически при генерации: анализ персонажей (vision), расположение сцены, описание референса композиции.
+                      </div>
+
+                      {/* Editable prompt textarea */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                            {settingsPromptMode === 'create' ? 'Системный промпт (создание)' : 'Системный промпт (доработка)'}
+                          </label>
+                          <button
+                            onClick={() => setSettings((s: any) =>
+                              settingsPromptMode === 'create'
+                                ? { ...s, customSystemPromptCreate: undefined }
+                                : { ...s, customSystemPromptEdit: undefined }
+                            )}
+                            className="text-[10px] font-bold text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1 rounded-lg hover:bg-white/5"
+                          >
+                            ↺ Сбросить
+                          </button>
+                        </div>
+                        <textarea
+                          value={
+                            settingsPromptMode === 'create'
+                              ? (settings.customSystemPromptCreate ?? DEFAULT_SYSTEM_PROMPT_CREATE)
+                              : (settings.customSystemPromptEdit ?? DEFAULT_SYSTEM_PROMPT_EDIT)
+                          }
+                          onChange={e => setSettings((s: any) =>
+                            settingsPromptMode === 'create'
+                              ? { ...s, customSystemPromptCreate: e.target.value }
+                              : { ...s, customSystemPromptEdit: e.target.value }
+                          )}
+                          rows={14}
+                          spellCheck={false}
+                          className="w-full bg-zinc-900 border border-white/10 rounded-xl px-4 py-3 text-[11px] text-zinc-300 font-mono leading-relaxed resize-y focus:outline-none focus:border-indigo-500/50 transition-colors"
+                        />
+                      </div>
+
+                      {/* Dynamic blocks preview */}
+                      <div className="rounded-xl border border-white/5 overflow-hidden">
+                        <div className="px-4 py-2.5 bg-zinc-900 border-b border-white/5">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Динамические блоки (только для просмотра)</span>
+                        </div>
+                        <pre className="p-4 text-[10px] text-zinc-600 font-mono leading-relaxed whitespace-pre-wrap">{settingsPromptMode === 'create'
+? `[SOURCE_LOCK — vision analysis of character images]
+${settings.strictMode ? '[STRICT MODE: prioritize pixel-exact match]\n' : ''}[SCENE LAYOUT — left/center/right roles if set]
+[LAYOUT — reference composition analysis if reference provided]
+USER: ${settings.prompt || '(your prompt if set)'}
+AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing, changing faces, mutation, extra limbs, collage, split-screen
+[BATCH_VARIANT — if batch size > 1]`
+: `USER PROMPT: ${settings.prompt || '(your prompt if set)'}
+AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing, changing faces, mutation, extra limbs, collage, split-screen`}</pre>
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+
+                {/* Modal Footer */}
+                <div className="px-6 py-4 border-t border-white/5 shrink-0">
+                  <button
+                    onClick={() => setShowSettings(false)}
+                    className="w-full py-3 bg-white text-zinc-950 font-black rounded-2xl hover:bg-zinc-100 transition-all text-sm uppercase tracking-widest"
+                  >
+                    Готово
+                  </button>
+                </div>
+              </motion.div>
+            </div>
           </>
         )}
       </AnimatePresence>
@@ -1432,6 +1613,9 @@ AVOID: ${settings.negativePrompt ? `${settings.negativePrompt}, ` : ''}redrawing
               setBaseImage={setBaseImage}
               isGenerating={isGenerating}
               handleGenerate={handleGenerate}
+              generationProgress={generationProgress}
+              onCancelGeneration={handleCancelGeneration}
+              sceneToCoverWarning={sceneToCoverWarning}
               results={results}
               isUpscaling={isUpscaling}
               handleUpscale={handleUpscale}

@@ -20,6 +20,7 @@ import { ResultCard } from '../ResultCard';
 import { DeckImportSection } from '../DeckImportSection';
 import { OptimizedImage } from '../OptimizedImage';
 import type { CardLibraryEntry, ReferenceLibraryEntry } from '../../services/supabaseService';
+import { GENERATION_MODELS, MODELS_NO_512PX } from '../../constants';
 
 interface CreateTabProps {
   sources: any[];
@@ -39,6 +40,9 @@ interface CreateTabProps {
   setBaseImage: (image: { data: string; mimeType: string } | null) => void;
   isGenerating: boolean;
   handleGenerate: () => Promise<void>;
+  generationProgress: { done: number; total: number } | null;
+  onCancelGeneration: () => void;
+  sceneToCoverWarning: boolean;
   results: string[];
   isUpscaling: boolean;
   handleUpscale: (url: string, existingId?: string) => Promise<void>;
@@ -109,6 +113,9 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   setBaseImage,
   isGenerating,
   handleGenerate,
+  generationProgress,
+  onCancelGeneration,
+  sceneToCoverWarning,
   results,
   isUpscaling,
   handleUpscale,
@@ -178,6 +185,18 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   Сцена
                 </button>
               </div>
+              <AnimatePresence>
+                {sceneToCoverWarning && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    className="px-4 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-400 font-medium"
+                  >
+                    Назначения слотов (лево/центр/право) сброшены. Изображения сохранены.
+                  </motion.div>
+                )}
+              </AnimatePresence>
               {createLayoutMode === 'scene' && (
                 <div className="flex rounded-2xl bg-zinc-900/50 p-1 border border-white/5">
                   <button
@@ -446,21 +465,17 @@ export const CreateTab: React.FC<CreateTabProps> = ({
               <div className="space-y-3">
                 <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Модель</label>
                 <div className="flex flex-col gap-2">
-                  {[
-                    { id: "gemini-2.5-flash-image", name: "2.5 Flash (Самая быстрая)" },
-                    { id: "gemini-3.1-flash-image-preview", name: "3.1 Flash (Быстрая)" },
-                    { id: "gemini-3-pro-image-preview", name: "3 Pro (Качество)" }
-                  ].map(m => (
-                    <button 
+                  {GENERATION_MODELS.map(m => (
+                    <button
                       key={m.id}
-                      onClick={() => setSettings((s: any) => ({ 
-                        ...s, 
+                      onClick={() => setSettings((s: any) => ({
+                        ...s,
                         model: m.id,
-                        imageSize: (m.id === "gemini-3-pro-image-preview" && s.imageSize === "512px") ? "1K" : s.imageSize
+                        imageSize: (MODELS_NO_512PX.has(m.id) && s.imageSize === "512px") ? "1K" : s.imageSize
                       }))}
                       className={`px-4 py-3 rounded-2xl text-xs font-bold transition-all text-left border ${settings.model === m.id ? 'bg-white border-white text-zinc-950 shadow-md' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
                     >
-                      {m.name}
+                      {m.name} <span className="font-normal opacity-60">— {m.desc}</span>
                     </button>
                   ))}
                 </div>
@@ -485,7 +500,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                 <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Разрешение</label>
                 <div className="flex flex-wrap gap-2">
                   {RESOLUTIONS.map(res => {
-                    const isDisabled = settings.model === "gemini-3-pro-image-preview" && res === "512px";
+                    const isDisabled = MODELS_NO_512PX.has(settings.model) && res === "512px";
                     return (
                       <button 
                         key={res}
@@ -611,8 +626,30 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   </div>
                   <div className="space-y-3">
                     <h3 className="text-3xl font-black tracking-tighter text-white">Создаем шедевр...</h3>
-                    <p className="text-zinc-500 text-lg max-w-sm">Анализируем цвета, объекты и композицию для вашей уникальной обложки.</p>
+                    {generationProgress && generationProgress.total > 1 ? (
+                      <div className="space-y-3">
+                        <p className="text-zinc-400 text-lg font-bold">
+                          {generationProgress.done} / {generationProgress.total} вариантов готово
+                        </p>
+                        <div className="w-48 h-1.5 bg-zinc-800 rounded-full overflow-hidden mx-auto">
+                          <motion.div
+                            className="h-full bg-indigo-500 rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${(generationProgress.done / generationProgress.total) * 100}%` }}
+                            transition={{ ease: "easeOut" }}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-zinc-500 text-lg max-w-sm">Анализируем цвета, объекты и композицию для вашей уникальной обложки.</p>
+                    )}
                   </div>
+                  <button
+                    onClick={onCancelGeneration}
+                    className="px-6 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-sm font-bold transition-all border border-white/10"
+                  >
+                    Отмена
+                  </button>
                 </div>
               </motion.div>
             ) : results.length > 0 ? (

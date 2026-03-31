@@ -1,7 +1,32 @@
 import { GoogleGenAI } from "@google/genai";
+import { MODELS_SUPPORTING_IMAGE_SIZE } from "../constants";
 
 /** Multimodal vision for composition / QA (not the image generator). */
 const VISION_MODEL = "gemini-3.1-flash-lite-preview";
+
+export const DEFAULT_SYSTEM_PROMPT_CREATE =
+`TASK: MASTER COMPOSITING — PHOTO-COMPOSITE, NOT RE-ILLUSTRATION.
+The image model must treat SOURCE images as UNTOUCHABLE identity references.
+RULES:
+1. ZERO REDRAW / ZERO "IMPROVING": Do not repaint faces, skin, hair, eyes, or costumes. No beautification, no style drift.
+2. COMPOSITE LIKE REAL PHOTO LAYERS: Only perspective warp, scale, blend edges, and relight onto ONE shared environment.
+3. FIDELITY: Every emblem, armor plate, horn, and strand must match the corresponding SOURCE.
+4. STYLE LOCK: Match the art style of the SOURCE card art (same brush feel); do not generic-paint new faces.
+5. ENVIRONMENT: One new coherent background; light wraps BOTH characters consistently (no split-screen lighting).
+6. NO COLLAGE: No visible seams, no duplicated horizons, no mismatched color grades left vs right.
+7. GROUNDING: Contact shadows; feet on shared ground plane.`;
+
+export const DEFAULT_SYSTEM_PROMPT_EDIT =
+`TASK: SURGICAL REFINEMENT.
+OBJECTIVE: Modify "BASE IMAGE" using "SOURCE CHARACTER" as FIXED ASSETS.
+RULES:
+1. ZERO REDRAWING: Faces, hair, eyes, and features MUST be 100% identical to source.
+2. PIXEL-PERFECT: Use exact silhouettes. No new limbs or armor.
+3. STYLE: VIBRANT FANTASY DIGITAL PAINTING (Hearthstone style).
+4. INTEGRATION: Unified lighting, atmosphere, and contact shadows.
+5. LIGHTING: Single dominant light source. Strong rim lighting.
+6. COLOR: Match environment ambient light.
+7. GROUNDING: Realistic shadows connected to feet.`;
 
 export interface GenerationSettings {
   model: string;
@@ -11,6 +36,8 @@ export interface GenerationSettings {
   negativePrompt?: string;
   batchSize: number;
   strictMode?: boolean;
+  customSystemPromptCreate?: string;
+  customSystemPromptEdit?: string;
 }
 
 export interface ImageSource {
@@ -88,7 +115,7 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
 function dataUrlToImageSource(dataUrl: string): ImageSource {
   const match = dataUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
   if (!match) throw new Error("Invalid data URL");
-  return { data: dataUrl, mimeType: match[1] };
+  return { data: match[2], mimeType: match[1] };
 }
 
 const SOURCE_BRIEF_MAX_CHARS = 600;
@@ -432,7 +459,7 @@ ${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}` : ""}`;
   parts.push({ text: fixPrompt });
 
   const imageConfig: any = { aspectRatio: settings.aspectRatio };
-  if (model === "gemini-3.1-flash-image-preview" || model === "gemini-3-pro-image-preview") {
+  if (MODELS_SUPPORTING_IMAGE_SIZE.has(model)) {
     imageConfig.imageSize = settings.imageSize;
   }
 
@@ -456,7 +483,8 @@ export async function generateFusedCover(
   settings: GenerationSettings,
   baseImage: ImageSource | null = null,
   likedImages: string[] = [],
-  referenceCompositionNotes: string | null = null
+  referenceCompositionNotes: string | null = null,
+  onProgress?: (done: number, total: number) => void
 ): Promise<string[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -510,6 +538,24 @@ export async function generateFusedCover(
   }
 
   const sceneLayout = !baseImage ? sceneLayoutBlock(sources) : "";
+
+  // Pre-load liked images once before the batch loop to avoid redundant fetches
+  // and to allow batch promises to run truly in parallel (no serial awaits inside loop).
+  const likedInlineData: Array<{ data: string; mimeType: string }> = [];
+  if (likedImages.length > 0) {
+    const recentLikes = likedImages.slice(0, 3);
+    for (const likedUrl of recentLikes) {
+      try {
+        const inline = await likedUrlToInlineData(likedUrl);
+        if (inline) likedInlineData.push(inline);
+      } catch (e) {
+        console.error("Failed to parse liked image", e);
+      }
+    }
+  }
+
+  let batchDone = 0;
+  onProgress?.(0, settings.batchSize);
   const generatePromises: Promise<string[]>[] = [];
 
   // Since generateContent usually returns one image, we loop for batch size
@@ -538,29 +584,21 @@ export async function generateFusedCover(
       });
     }
 
-    if (likedImages.length > 0) {
+    if (likedInlineData.length > 0) {
       parts.push({ text: "EXAMPLES OF HIGH-QUALITY RESULTS (Use these as a benchmark for quality, lighting, and integration):" });
-      const recentLikes = likedImages.slice(0, 3);
-      for (const likedUrl of recentLikes) {
-        try {
-          const inline = await likedUrlToInlineData(likedUrl);
-          if (inline) {
-            parts.push({
-              inlineData: {
-                data: inline.data,
-                mimeType: inline.mimeType,
-              },
-            });
-          }
-        } catch (e) {
-          console.error("Failed to parse liked image", e);
-        }
+      for (const inline of likedInlineData) {
+        parts.push({ inlineData: { data: inline.data, mimeType: inline.mimeType } });
       }
     }
 
     // Add prompt with strict instructions
-    const fullPrompt = baseImage 
-      ? `TASK: SURGICAL REFINEMENT.
+    const useCustomCreate = !baseImage && settings.customSystemPromptCreate?.trim();
+    const useCustomEdit = baseImage && settings.customSystemPromptEdit?.trim();
+
+    const fullPrompt = baseImage
+      ? useCustomEdit
+        ? settings.customSystemPromptEdit!
+        : `TASK: SURGICAL REFINEMENT.
          OBJECTIVE: Modify "BASE IMAGE" using "SOURCE CHARACTER" as FIXED ASSETS.
          RULES:
          1. ZERO REDRAWING: Faces, hair, eyes, and features MUST be 100% identical to source.
@@ -571,7 +609,13 @@ export async function generateFusedCover(
          6. COLOR: Match environment ambient light.
          7. GROUNDING: Realistic shadows connected to feet.
          8. PROMPT: ${settings.prompt ? `ONLY: ${settings.prompt}` : "Improve integration."}`
-      : `TASK: MASTER COMPOSITING — PHOTO-COMPOSITE, NOT RE-ILLUSTRATION.
+      : useCustomCreate
+        ? `${settings.customSystemPromptCreate}
+    ${sourceBrief ? `\nSOURCE_LOCK (VISION ANALYSIS — DO NOT VIOLATE):\n${sourceBrief}` : ""}
+    ${settings.strictMode ? `\nSTRICT MODE: If any conflict, prioritize exact match to SOURCE CHARACTER pixels over creativity.` : ""}
+    ${sceneLayout ? sceneLayout : ""}
+    ${compositionDescription ? `LAYOUT (reference template — spatial only):\n- ${compositionDescription}\n- Do NOT copy template scenery, palette, or character designs from the template.\n- Match scale and framing only.` : ""}`
+        : `TASK: MASTER COMPOSITING — PHOTO-COMPOSITE, NOT RE-ILLUSTRATION.
     The image model (Gemini 3.1 Flash Image) must treat SOURCE images as UNTOUCHABLE identity references.
     RULES:
     1. ZERO REDRAW / ZERO "IMPROVING": Do not repaint faces, skin, hair, eyes, or costumes. No beautification, no style drift.
@@ -594,7 +638,7 @@ export async function generateFusedCover(
     - Match scale and framing only.` : ""}`;
 
     const finalPrompt = `${fullPrompt}
-    ${settings.prompt && !baseImage ? `USER: ${settings.prompt}` : ""}
+    ${(settings.prompt && !baseImage) || (settings.prompt && useCustomEdit) ? `USER: ${settings.prompt}` : ""}
     ${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}, redrawing, changing faces, mutation, extra limbs, collage, split-screen` : "AVOID: redrawing, changing faces, mutation, extra limbs, collage, split-screen"}`;
 
     const batchVariation =
@@ -608,7 +652,7 @@ export async function generateFusedCover(
       aspectRatio: settings.aspectRatio,
     };
     
-    if (model === "gemini-3.1-flash-image-preview" || model === "gemini-3-pro-image-preview") {
+    if (MODELS_SUPPORTING_IMAGE_SIZE.has(model)) {
       imageConfig.imageSize = settings.imageSize;
     }
 
@@ -625,6 +669,8 @@ export async function generateFusedCover(
           generatedUrls.push(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
         }
       }
+      batchDone++;
+      onProgress?.(batchDone, settings.batchSize);
       return generatedUrls;
     });
 
@@ -658,6 +704,19 @@ export async function generateFusedCover(
   return results;
 }
 
+/**
+ * Normalize an ImageSource to base64 inlineData.
+ * Handles both data URLs and http(s) public URLs (e.g. Supabase storage).
+ */
+async function normalizeImageSource(image: ImageSource): Promise<{ data: string; mimeType: string }> {
+  if (image.data.startsWith("http://") || image.data.startsWith("https://")) {
+    const inline = await likedUrlToInlineData(image.data);
+    if (!inline) throw new Error(`Failed to fetch image from URL: ${image.data}`);
+    return inline;
+  }
+  return { data: image.data.split(",")[1] || image.data, mimeType: image.mimeType };
+}
+
 export async function upscaleImage(
   image: ImageSource,
   targetSize: "1K" | "2K" | "4K" = "4K",
@@ -669,9 +728,10 @@ export async function upscaleImage(
   }
 
   const ai = new GoogleGenAI({ apiKey });
-  
+  const normalized = await normalizeImageSource(image);
+
   const imageConfig: any = {};
-  if (model === "gemini-3.1-flash-image-preview" || model === "gemini-3-pro-image-preview") {
+  if (MODELS_SUPPORTING_IMAGE_SIZE.has(model)) {
     imageConfig.imageSize = targetSize;
   }
 
@@ -681,8 +741,8 @@ export async function upscaleImage(
       parts: [
         {
           inlineData: {
-            data: image.data.split(",")[1] || image.data,
-            mimeType: image.mimeType,
+            data: normalized.data,
+            mimeType: normalized.mimeType,
           },
         },
         { text: `UPSCALE TASK: Act as a high-end image restoration and super-resolution engine. 
@@ -718,15 +778,16 @@ export async function expandImage(
   }
 
   const ai = new GoogleGenAI({ apiKey });
-  
+  const normalized = await normalizeImageSource(image);
+
   const response = await ai.models.generateContent({
     model,
     contents: {
       parts: [
         {
           inlineData: {
-            data: image.data.split(",")[1] || image.data,
-            mimeType: image.mimeType,
+            data: normalized.data,
+            mimeType: normalized.mimeType,
           },
         },
         { text: `OUTPAINTING TASK: Expand this image to a ${targetAspectRatio} aspect ratio. 

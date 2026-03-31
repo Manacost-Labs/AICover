@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { UpscaleResultCard } from '../UpscaleResultCard';
 import { OptimizedImage } from '../OptimizedImage';
+import { UPSCALE_EXPAND_MODELS } from '../../constants';
 
 interface UpscaleTabProps {
   upscaleSource: { data: string; mimeType: string } | null;
@@ -93,11 +94,7 @@ export const UpscaleTab: React.FC<UpscaleTabProps> = ({
                 <div className="space-y-4">
                   <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Модель апскейла</label>
                   <div className="flex flex-col gap-2">
-                    {[
-                      { id: "gemini-2.5-flash-image", label: "Gemini 2.5 (Самая быстрая)", desc: "Максимальная скорость генерации" },
-                      { id: "gemini-3.1-flash-image-preview", label: "Gemini 3.1 Flash (Быстрая)", desc: "Лучший баланс скорости и качества" },
-                      { id: "gemini-3-pro-image-preview", label: "Gemini 3 Pro (Детальная)", desc: "Максимальная детализация текстур" }
-                    ].map(m => (
+                    {UPSCALE_EXPAND_MODELS.map(m => (
                       <button 
                         key={m.id}
                         onClick={() => setUpscaleSettings(s => ({ ...s, model: m.id }))}
