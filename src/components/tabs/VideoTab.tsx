@@ -12,11 +12,6 @@ import {
 import { OptimizedImage } from "../OptimizedImage";
 import { VideoResultCard } from "../VideoResultCard";
 import { CollapsibleSection } from "../ui/CollapsibleSection";
-import {
-  PreviewScaleSlider,
-  ScaledResultGrid,
-  useResultPreviewScaleFromStorage,
-} from "../ui/ResultPreviewScale";
 import type { VeoProgressPhase } from "../../services/veoService";
 
 export interface VeoSettingsState {
@@ -121,8 +116,6 @@ export const VideoTab: React.FC<VideoTabProps> = ({
   };
 
   const canRun = !!sourceImage && !isGenerating;
-  const { pct: previewScalePct, setPct: setPreviewScalePct, scale: previewScale } =
-    useResultPreviewScaleFromStorage();
 
   return (
     <div id="video-tab" className="grid grid-cols-1 lg:grid-cols-12 gap-10">
@@ -322,10 +315,6 @@ export const VideoTab: React.FC<VideoTabProps> = ({
       <div id="veo-section-result" className="lg:col-span-8 space-y-6 scroll-mt-24">
         <h3 className="text-xl font-black text-white">Результат</h3>
 
-        {videoResults.length > 0 && !isGenerating && (
-          <PreviewScaleSlider value={previewScalePct} onChange={setPreviewScalePct} />
-        )}
-
         {isGenerating && (
           <div
             id="veo-generation-progress"
@@ -360,25 +349,23 @@ export const VideoTab: React.FC<VideoTabProps> = ({
             <p className="text-zinc-500 text-center max-w-sm">Здесь появятся клипы после генерации.</p>
           </div>
         ) : videoResults.length > 0 ? (
-          <ScaledResultGrid scale={previewScale}>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {videoResults.map((url, i) => (
-                <VideoResultCard
-                  key={url + i}
-                  url={url}
-                  isLiked={likedVideoSet.has(url)}
-                  onToggleLike={toggleVideoLike}
-                  onFullscreen={setFullscreenVideo}
-                  onDownload={(u) => {
-                    const a = document.createElement("a");
-                    a.href = u;
-                    a.download = `veo-${i}.mp4`;
-                    a.click();
-                  }}
-                />
-              ))}
-            </div>
-          </ScaledResultGrid>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {videoResults.map((url, i) => (
+              <VideoResultCard
+                key={url + i}
+                url={url}
+                isLiked={likedVideoSet.has(url)}
+                onToggleLike={toggleVideoLike}
+                onFullscreen={setFullscreenVideo}
+                onDownload={(u) => {
+                  const a = document.createElement("a");
+                  a.href = u;
+                  a.download = `veo-${i}.mp4`;
+                  a.click();
+                }}
+              />
+            ))}
+          </div>
         ) : null}
       </div>
     </div>

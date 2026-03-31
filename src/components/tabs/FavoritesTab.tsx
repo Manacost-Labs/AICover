@@ -4,11 +4,6 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Film, Image as ImageIcon, Layout, Loader2, Sparkles, X } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
 import { VideoResultCard } from '../VideoResultCard';
-import {
-  PreviewScaleSlider,
-  ScaledResultGrid,
-  useResultPreviewScaleFromStorage,
-} from '../ui/ResultPreviewScale';
 
 interface FavoritesTabProps {
   likedImages: string[];
@@ -71,8 +66,6 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
   onRefine
 }) => {
   const [mediaKind, setMediaKind] = useState<'images' | 'videos'>('images');
-  const { pct: previewScalePct, setPct: setPreviewScalePct, scale: previewScale } =
-    useResultPreviewScaleFromStorage();
   const [choiceNoteModalUrl, setChoiceNoteModalUrl] = useState<string | null>(null);
   const [videoChoiceNoteModalUrl, setVideoChoiceNoteModalUrl] = useState<string | null>(null);
 
@@ -133,15 +126,10 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
         </div>
       </div>
 
-      {(likedImages.length > 0 || likedVideos.length > 0) && (
-        <PreviewScaleSlider value={previewScalePct} onChange={setPreviewScalePct} />
-      )}
-
       {mediaKind === 'images' ? (
       <section className="space-y-6">
         <h3 className="text-xl font-black tracking-tight text-white">Обложки</h3>
         {likedImages.length > 0 ? (
-          <ScaledResultGrid scale={previewScale}>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {likedImages.map((url, i) => (
               <div key={url + i} className="space-y-3">
@@ -181,7 +169,6 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
               </div>
             ))}
           </div>
-          </ScaledResultGrid>
         ) : (
           <div className="h-[280px] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
             <div className="w-16 h-16 bg-zinc-900 rounded-3xl flex items-center justify-center border border-white/5">
@@ -195,7 +182,6 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
       <section className="space-y-6">
         <h3 className="text-xl font-black tracking-tight text-white">Клипы</h3>
         {likedVideos.length > 0 ? (
-          <ScaledResultGrid scale={previewScale}>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {likedVideos.map((url, i) => (
               <div key={url + i} className="space-y-3">
@@ -233,7 +219,6 @@ export const FavoritesTab: React.FC<FavoritesTabProps> = ({
               </div>
             ))}
           </div>
-          </ScaledResultGrid>
         ) : (
           <div className="h-[280px] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
             <div className="w-16 h-16 bg-zinc-900 rounded-3xl flex items-center justify-center border border-white/5">

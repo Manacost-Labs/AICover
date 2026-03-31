@@ -14,11 +14,6 @@ import {
 import { UpscaleResultCard } from '../UpscaleResultCard';
 import { OptimizedImage } from '../OptimizedImage';
 import { UPSCALE_EXPAND_MODELS } from '../../constants';
-import {
-  PreviewScaleSlider,
-  ScaledResultGrid,
-  useResultPreviewScaleFromStorage,
-} from '../ui/ResultPreviewScale';
 
 interface ExpandTabProps {
   expandSource: { data: string; mimeType: string } | null;
@@ -51,8 +46,6 @@ export const ExpandTab: React.FC<ExpandTabProps> = ({
 }) => {
   const [showExpandSettings, setShowExpandSettings] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const { pct: previewScalePct, setPct: setPreviewScalePct, scale: previewScale } =
-    useResultPreviewScaleFromStorage();
 
   const handleFile = (file: File) => {
     if (file && file.type.startsWith('image/')) {
@@ -242,20 +235,17 @@ export const ExpandTab: React.FC<ExpandTabProps> = ({
               Очистить
             </button>
           </div>
-          <PreviewScaleSlider value={previewScalePct} onChange={setPreviewScalePct} />
-          <ScaledResultGrid scale={previewScale}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              {expandResults.map((item) => (
-                <UpscaleResultCard 
-                  key={item.id} 
-                  item={item} 
-                  onRetry={(url) => handleExpand(url)} 
-                  onFullscreen={setFullscreenImage} 
-                  onRefine={onRefine}
-                />
-              ))}
-            </div>
-          </ScaledResultGrid>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            {expandResults.map((item) => (
+              <UpscaleResultCard 
+                key={item.id} 
+                item={item} 
+                onRetry={(url) => handleExpand(url)} 
+                onFullscreen={setFullscreenImage} 
+                onRefine={onRefine}
+              />
+            ))}
+          </div>
         </section>
       )}
     </div>

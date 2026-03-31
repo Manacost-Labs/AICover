@@ -4,11 +4,6 @@ import { Images, Plus, X, Trash2, Upload, Loader2, AlertTriangle, Settings } fro
 import type { ReferenceLibraryEntry } from '../../services/supabaseService';
 import { OptimizedImage } from '../OptimizedImage';
 import { isSupabaseConfigured, formatSupabaseClientError } from '../../services/supabaseService';
-import {
-  PreviewScaleSlider,
-  ScaledResultGrid,
-  useResultPreviewScaleFromStorage,
-} from '../ui/ResultPreviewScale';
 
 interface ReferencesTabProps {
   referenceLibrary: ReferenceLibraryEntry[];
@@ -36,8 +31,6 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const { pct: previewScalePct, setPct: setPreviewScalePct, scale: previewScale } =
-    useResultPreviewScaleFromStorage();
 
   const handleFile = (file: File) => {
     if (!file.type.startsWith('image/')) return;
@@ -217,10 +210,7 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
       </AnimatePresence>
 
       {referenceLibrary.length > 0 ? (
-        <div className="space-y-4">
-          <PreviewScaleSlider value={previewScalePct} onChange={setPreviewScalePct} />
-          <ScaledResultGrid scale={previewScale}>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 items-start">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 items-start">
           {referenceLibrary.map(entry => (
             <motion.div key={entry.id} layout className="group relative w-full rounded-[1.5rem] overflow-hidden bg-zinc-900 border border-white/5">
               <button type="button" className="w-full block" onClick={() => setFullscreenImage(entry.storageUrl)}>
@@ -245,8 +235,6 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
               </div>
             </motion.div>
           ))}
-            </div>
-          </ScaledResultGrid>
         </div>
       ) : (
         <div className="h-[320px] flex flex-col items-center justify-center rounded-[2rem] border border-white/5 bg-zinc-900/30 text-zinc-500 text-sm">
