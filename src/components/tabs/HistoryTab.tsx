@@ -1,7 +1,10 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Layout } from 'lucide-react';
+import { Film, Layout } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
+import { VideoResultCard } from '../VideoResultCard';
+import { clearVideoHistory } from '../../services/supabaseService';
+
 interface HistoryTabProps {
   history: string[];
   setHistory: React.Dispatch<React.SetStateAction<string[]>>;
@@ -9,6 +12,11 @@ interface HistoryTabProps {
   toggleLike: (url: string) => Promise<void>;
   handleUpscale: (url: string, existingId?: string) => Promise<void>;
   setFullscreenImage: (url: string | null) => void;
+  videoHistory: string[];
+  setVideoHistory: React.Dispatch<React.SetStateAction<string[]>>;
+  likedVideoSet: Set<string>;
+  toggleVideoLike: (url: string) => Promise<void>;
+  setFullscreenVideo: (url: string | null) => void;
   onRefine: (url: string) => void;
 }
 
@@ -19,58 +27,118 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
   toggleLike,
   handleUpscale,
   setFullscreenImage,
+  videoHistory,
+  setVideoHistory,
+  likedVideoSet,
+  toggleVideoLike,
+  setFullscreenVideo,
   onRefine
 }) => {
+  const clearImageHistory = () => {
+    setHistory([]);
+  };
+
+  const clearVideoHistoryLocal = () => {
+    setVideoHistory([]);
+    void clearVideoHistory();
+  };
+
   return (
     <motion.div 
       key="history"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
-      className="space-y-10"
+      className="space-y-12"
     >
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-4xl font-black tracking-tighter text-white">История</h2>
-          <p className="text-zinc-500 mt-2">Ваши последние генерации</p>
-        </div>
-        <button 
-          onClick={() => { setHistory([]); }}
-          className="px-6 py-2 bg-red-500/10 text-red-500 rounded-full text-sm font-bold hover:bg-red-500/20 transition-all"
-        >
-          Очистить историю
-        </button>
+      <div>
+        <h2 className="text-4xl font-black tracking-tighter text-white">История</h2>
+        <p className="text-zinc-500 mt-2">Последние генерации обложек и видео</p>
       </div>
 
-      {history.length > 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {history.map((url, i) => (
-            <ResultCard
-              key={url}
-              url={url}
-              isLiked={likedSet.has(url)} 
-              onToggleLike={toggleLike} 
-              onUpscale={handleUpscale} 
-              onFullscreen={setFullscreenImage} 
-              onRefine={onRefine}
-              onDownload={(url) => {
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = `history-${i}.png`;
-                link.click();
-              }}
-            />
-          ))}
+      <section className="space-y-6">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <h3 className="text-xl font-black tracking-tight text-white">Изображения</h3>
+          <button 
+            type="button"
+            onClick={clearImageHistory}
+            disabled={history.length === 0}
+            className="px-6 py-2 bg-red-500/10 text-red-500 rounded-full text-sm font-bold hover:bg-red-500/20 transition-all disabled:opacity-40 disabled:pointer-events-none"
+          >
+            Очистить историю
+          </button>
         </div>
-      ) : (
-        <div className="h-[400px] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
-          <div className="w-20 h-20 bg-zinc-900 rounded-3xl flex items-center justify-center border border-white/5">
-            <Layout className="w-10 h-10 text-zinc-800" />
+
+        {history.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {history.map((url, i) => (
+              <ResultCard
+                key={url}
+                url={url}
+                isLiked={likedSet.has(url)} 
+                onToggleLike={toggleLike} 
+                onUpscale={handleUpscale} 
+                onFullscreen={setFullscreenImage} 
+                onRefine={onRefine}
+                onDownload={(dlUrl) => {
+                  const link = document.createElement('a');
+                  link.href = dlUrl;
+                  link.download = `history-${i}.png`;
+                  link.click();
+                }}
+              />
+            ))}
           </div>
-          <h3 className="text-2xl font-black tracking-tighter text-zinc-600">История пуста</h3>
-          <p className="text-zinc-500 max-w-xs">Здесь появятся ваши первые работы после генерации.</p>
+        ) : (
+          <div className="h-[280px] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
+            <div className="w-16 h-16 bg-zinc-900 rounded-3xl flex items-center justify-center border border-white/5">
+              <Layout className="w-8 h-8 text-zinc-800" />
+            </div>
+            <h3 className="text-lg font-black tracking-tighter text-zinc-600">Нет обложек в истории</h3>
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-6">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <h3 className="text-xl font-black tracking-tight text-white">Видео</h3>
+          <button 
+            type="button"
+            onClick={clearVideoHistoryLocal}
+            disabled={videoHistory.length === 0}
+            className="px-6 py-2 bg-red-500/10 text-red-500 rounded-full text-sm font-bold hover:bg-red-500/20 transition-all disabled:opacity-40 disabled:pointer-events-none"
+          >
+            Очистить видео
+          </button>
         </div>
-      )}
+
+        {videoHistory.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {videoHistory.map((url, i) => (
+              <VideoResultCard
+                key={url}
+                url={url}
+                isLiked={likedVideoSet.has(url)}
+                onToggleLike={toggleVideoLike}
+                onFullscreen={setFullscreenVideo}
+                onDownload={(dlUrl) => {
+                  const link = document.createElement('a');
+                  link.href = dlUrl;
+                  link.download = `history-video-${i}.mp4`;
+                  link.click();
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="h-[280px] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
+            <div className="w-16 h-16 bg-zinc-900 rounded-3xl flex items-center justify-center border border-white/5">
+              <Film className="w-8 h-8 text-zinc-800" />
+            </div>
+            <h3 className="text-lg font-black tracking-tighter text-zinc-600">Нет видео в истории</h3>
+          </div>
+        )}
+      </section>
     </motion.div>
   );
 };

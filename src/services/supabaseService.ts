@@ -440,6 +440,152 @@ export async function removeFromFavorites(url: string): Promise<void> {
   }
 }
 
+
+
+// ─── Video history / favorites (Veo) ───────────────────────────────────────────
+
+export async function loadVideoHistory(): Promise<string[]> {
+  if (!supabase) {
+    const data = await get('fusion_video_history');
+    return data || [];
+  }
+  const { data, error } = await supabase
+    .from('video_history')
+    .select('storage_path')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) { console.error('loadVideoHistory', error); return []; }
+  return (data || []).map(row => getPublicUrl(row.storage_path));
+}
+
+export async function saveVideoToHistory(videoInput: string, mimeType = 'video/mp4'): Promise<void> {
+  let dataUrl = videoInput;
+  let mt = mimeType;
+  try {
+    if (videoInput.startsWith('http://') || videoInput.startsWith('https://')) {
+      const conv = await urlToBase64(videoInput);
+      dataUrl = conv.base64;
+      mt = conv.mimeType || mimeType;
+    } else if (!videoInput.startsWith('data:')) {
+      console.warn('saveVideoToHistory: expected data URL or http(s) URL, skipping');
+      return;
+    }
+  } catch (e) {
+    console.error('saveVideoToHistory: could not resolve video', e);
+    return;
+  }
+
+  try {
+    const existing: string[] = (await get('fusion_video_history')) || [];
+    const updated = [dataUrl, ...existing].slice(0, 50);
+    await set('fusion_video_history', updated);
+  } catch {}
+
+  if (!supabase) return;
+  try {
+    const id = newId();
+    const ext = mt.split('/')[1]?.split('+')[0] || 'mp4';
+    const storagePath = `video_history/${id}.${ext}`;
+    const blob = base64ToBytes(dataUrl, mt);
+    await uploadBlob(blob, storagePath);
+    await supabase.from('video_history').insert({ id, storage_path: storagePath, created_at: Date.now() });
+  } catch (e) {
+    console.error('saveVideoToHistory Supabase', e);
+  }
+}
+
+export async function clearVideoHistory(): Promise<void> {
+  try { await del('fusion_video_history'); } catch {}
+  if (!supabase) return;
+  try {
+    const { data } = await supabase.from('video_history').select('storage_path');
+    if (data?.length) await supabase.storage.from('images').remove(data.map(r => r.storage_path));
+    await supabase.from('video_history').delete().neq('id', '');
+  } catch (e) {
+    console.error('clearVideoHistory Supabase', e);
+  }
+}
+
+export async function loadVideoFavorites(): Promise<string[]> {
+  if (!supabase) {
+    const data = await get('fusion_video_liked');
+    return data || [];
+  }
+  const { data, error } = await supabase
+    .from('video_favorites')
+    .select('storage_path')
+    .order('created_at', { ascending: false });
+  if (error) { console.error('loadVideoFavorites', error); return []; }
+  return (data || []).map(row => getPublicUrl(row.storage_path));
+}
+
+export async function addVideoToFavorites(url: string): Promise<{ id: string } | null> {
+  if (!supabase) return null;
+  try {
+    const id = newId();
+    let storagePath: string;
+    let mimeType = 'video/mp4';
+
+    if (url.startsWith('data:')) {
+      const m = url.match(/^data:(video\/[^;]+);base64,/);
+      if (m) mimeType = m[1];
+      const ext = mimeType.split('/')[1]?.split('+')[0] || 'mp4';
+      storagePath = `video_favorites/${id}.${ext}`;
+      const blob = base64ToBytes(url, mimeType);
+      await uploadBlob(blob, storagePath);
+    } else {
+      const { base64, mimeType: mt } = await urlToBase64(url);
+      mimeType = mt;
+      const ext = mimeType.split('/')[1]?.split('+')[0] || 'mp4';
+      storagePath = `video_favorites/${id}.${ext}`;
+      const blob = base64ToBytes(base64, mimeType);
+      await uploadBlob(blob, storagePath);
+    }
+    await supabase.from('video_favorites').insert({ id, storage_path: storagePath, created_at: Date.now() });
+    return { id };
+  } catch (e) {
+    console.error('addVideoToFavorites Supabase', e);
+    return null;
+  }
+}
+
+export async function updateVideoFavoriteChoiceAnalysis(id: string, choiceAnalysis: string): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase.from('video_favorites').update({ choice_analysis: choiceAnalysis }).eq('id', id);
+  if (error) console.error('updateVideoFavoriteChoiceAnalysis', error);
+}
+
+export async function loadVideoFavoriteChoiceNotesMap(): Promise<Record<string, string>> {
+  if (!supabase) return {};
+  const { data, error } = await supabase
+    .from('video_favorites')
+    .select('storage_path, choice_analysis')
+    .not('choice_analysis', 'is', null);
+  if (error || !data?.length) return {};
+  const out: Record<string, string> = {};
+  for (const row of data) {
+    if (row.choice_analysis && row.storage_path) {
+      out[getPublicUrl(row.storage_path)] = row.choice_analysis as string;
+    }
+  }
+  return out;
+}
+
+export async function removeVideoFromFavorites(url: string): Promise<void> {
+  if (!supabase) return;
+  try {
+    const path = extractPathFromUrl(url);
+    if (path) {
+      await supabase.storage.from('images').remove([path]);
+      await supabase.from('video_favorites').delete().eq('storage_path', path);
+    } else {
+      console.warn('removeVideoFromFavorites: could not extract path from', url.slice(0, 50));
+    }
+  } catch (e) {
+    console.error('removeVideoFromFavorites Supabase', e);
+  }
+}
+
 // ─── Migration IDB → Supabase ─────────────────────────────────────────────────
 
 export async function migrateFromIDB(): Promise<void> {

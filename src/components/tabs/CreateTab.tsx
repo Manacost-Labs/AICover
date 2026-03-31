@@ -14,7 +14,7 @@ import {
   LayoutGrid,
   GripVertical,
 } from 'lucide-react';
-import type { SceneRole } from '../../services/geminiService';
+import type { CoverGenerationProgress, SceneRole } from '../../services/geminiService';
 import { sceneRolesOrder } from '../../services/geminiService';
 import { ResultCard } from '../ResultCard';
 import { DeckImportSection } from '../DeckImportSection';
@@ -40,7 +40,7 @@ interface CreateTabProps {
   setBaseImage: (image: { data: string; mimeType: string } | null) => void;
   isGenerating: boolean;
   handleGenerate: () => Promise<void>;
-  generationProgress: { done: number; total: number } | null;
+  generationProgress: CoverGenerationProgress | null;
   onCancelGeneration: () => void;
   sceneToCoverWarning: boolean;
   results: string[];
@@ -624,24 +624,57 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                     />
                     <Sparkles className="w-10 h-10 text-indigo-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                   </div>
-                  <div className="space-y-3">
+                  <div className="space-y-3 w-full max-w-md mx-auto">
                     <h3 className="text-3xl font-black tracking-tighter text-white">Создаем шедевр...</h3>
-                    {generationProgress && generationProgress.total > 1 ? (
-                      <div className="space-y-3">
-                        <p className="text-zinc-400 text-lg font-bold">
-                          {generationProgress.done} / {generationProgress.total} вариантов готово
-                        </p>
-                        <div className="w-48 h-1.5 bg-zinc-800 rounded-full overflow-hidden mx-auto">
+                    {generationProgress && (
+                      <p className="text-indigo-400/90 text-[11px] font-black uppercase tracking-widest">
+                        {generationProgress.phase === 'preparing' && 'Подготовка — анализ исходников'}
+                        {generationProgress.phase === 'generating' && 'Генерация изображений'}
+                        {generationProgress.phase === 'strict' && 'Строгий режим — проверка качества'}
+                      </p>
+                    )}
+                    {generationProgress && (
+                      <div className="relative w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
+                        {generationProgress.phase === 'preparing' || generationProgress.phase === 'strict' ? (
                           <motion.div
-                            className="h-full bg-indigo-500 rounded-full"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${(generationProgress.done / generationProgress.total) * 100}%` }}
-                            transition={{ ease: "easeOut" }}
+                            className="absolute top-0 bottom-0 w-[40%] rounded-full bg-gradient-to-r from-indigo-600 to-violet-500"
+                            initial={{ left: '-40%' }}
+                            animate={{ left: ['-40%', '100%'] }}
+                            transition={{ duration: 1.15, repeat: Infinity, ease: 'linear' }}
                           />
-                        </div>
+                        ) : (
+                          <motion.div
+                            className="absolute top-0 left-0 bottom-0 rounded-full bg-gradient-to-r from-indigo-600 to-violet-500"
+                            initial={{ width: '0%' }}
+                            animate={{
+                              width: `${Math.min(
+                                100,
+                                (generationProgress.done / Math.max(1, generationProgress.total)) * 100
+                              )}%`,
+                            }}
+                            transition={{ ease: 'easeOut', duration: 0.35 }}
+                          />
+                        )}
                       </div>
+                    )}
+                    {generationProgress && generationProgress.phase === 'generating' && generationProgress.total > 1 ? (
+                      <p className="text-zinc-400 text-sm font-bold">
+                        {generationProgress.done} / {generationProgress.total} вариантов готово
+                      </p>
+                    ) : generationProgress && generationProgress.phase === 'generating' && generationProgress.total === 1 ? (
+                      <p className="text-zinc-500 text-sm">Почти готово…</p>
+                    ) : generationProgress && generationProgress.phase === 'preparing' ? (
+                      <p className="text-zinc-500 text-sm max-w-sm mx-auto">
+                        Анализируем цвета, объекты и композицию для вашей уникальной обложки.
+                      </p>
+                    ) : generationProgress && generationProgress.phase === 'strict' ? (
+                      <p className="text-zinc-500 text-sm max-w-sm mx-auto">
+                        Автоматическая проверка и при необходимости доработка кадра.
+                      </p>
                     ) : (
-                      <p className="text-zinc-500 text-lg max-w-sm">Анализируем цвета, объекты и композицию для вашей уникальной обложки.</p>
+                      <p className="text-zinc-500 text-lg max-w-sm mx-auto">
+                        Анализируем цвета, объекты и композицию для вашей уникальной обложки.
+                      </p>
                     )}
                   </div>
                   <button

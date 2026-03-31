@@ -303,6 +303,73 @@ export async function analyzeFavoriteChoiceVision(
   }
 }
 
+
+const FAVORITE_VIDEO_CHOICE_VISION_PROMPT = `You are a vision analyst for AI-generated short VIDEO clips (Veo / image-to-video).
+
+The user added ONE video to favorites. It may be one of several variants from the same batch. Still frames are provided in order: first = CHOSEN (favorite), then REJECTED alternatives (if any). Each frame is an approximate first-frame snapshot of the clip.
+
+Task:
+- Infer plausible reasons the user might prefer the CHOSEN clip: motion subtlety, loop feel, stability (no zoom/pan if intended), artifact level, atmosphere, faithfulness to the original illustration.
+- Use cautious wording: "likely", "may", "tends to".
+- If there are NO alternatives, still summarize strengths of the chosen clip.
+
+Output ONLY valid JSON (no markdown, no code fences). Shape:
+{
+  "summary_ru": "2-4 sentences in Russian",
+  "likely_reasons_ru": ["short bullet in Russian", "..."],
+  "vs_others_ru": "1-3 sentences comparing chosen vs rejected; empty string if no alternatives"
+}`;
+
+/**
+ * Explains likely reasons the user favored one video variant over batch alternatives (Gemini vision on first frames).
+ */
+export async function analyzeFavoriteVideoChoiceVision(
+  chosen: ImageSource,
+  alternatives: ImageSource[],
+  options?: { userPromptHint?: string }
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("API Key not found");
+  }
+  const ai = new GoogleGenAI({ apiKey });
+  const hint = options?.userPromptHint?.trim();
+  const parts: any[] = [
+    {
+      text:
+        FAVORITE_VIDEO_CHOICE_VISION_PROMPT +
+        (hint ? "\nOptional user prompt/theme hint (may be empty): " + hint : "") +
+        "\n\nOrder: frame 1 = CHOSEN favorite (video). Frames 2+ = rejected batch variants (same count as provided).",
+    },
+    { text: "CHOSEN (favorite video, first frame):" },
+    {
+      inlineData: {
+        data: chosen.data.split(",")[1] || chosen.data,
+        mimeType: chosen.mimeType,
+      },
+    },
+  ];
+  alternatives.forEach((alt, idx) => {
+    parts.push({ text: "Rejected variant " + (idx + 1) + " (first frame):" });
+    parts.push({
+      inlineData: {
+        data: alt.data.split(",")[1] || alt.data,
+        mimeType: alt.mimeType,
+      },
+    });
+  });
+  try {
+    const res = await ai.models.generateContent({
+      model: VISION_MODEL,
+      contents: { parts },
+    });
+    return (res.text || "").trim() || "{}";
+  } catch (e) {
+    console.error("analyzeFavoriteVideoChoiceVision", e);
+    throw e;
+  }
+}
+
 /** Vision: lock-list per source — colors, light, must-preserve details (English, compact). */
 async function analyzeSourceCharactersForFusion(
   ai: GoogleGenAI,
@@ -477,6 +544,13 @@ ${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}` : ""}`;
   return null;
 }
 
+/** Progress for UI (header + Create tab): vision prep, parallel variants, strict QA. */
+export type CoverGenerationProgress = {
+  done: number;
+  total: number;
+  phase: 'preparing' | 'generating' | 'strict';
+};
+
 export async function generateFusedCover(
   sources: FusionSource[],
   reference: ImageSource | null,
@@ -484,7 +558,7 @@ export async function generateFusedCover(
   baseImage: ImageSource | null = null,
   likedImages: string[] = [],
   referenceCompositionNotes: string | null = null,
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (p: CoverGenerationProgress) => void
 ): Promise<string[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -493,6 +567,12 @@ export async function generateFusedCover(
 
   const ai = new GoogleGenAI({ apiKey });
   const model = settings.model;
+
+  onProgress?.({
+    done: 0,
+    total: settings.batchSize,
+    phase: 'preparing',
+  });
 
   let compositionDescription = "";
   let sourceBrief = "";
@@ -555,7 +635,11 @@ export async function generateFusedCover(
   }
 
   let batchDone = 0;
-  onProgress?.(0, settings.batchSize);
+  onProgress?.({
+    done: 0,
+    total: settings.batchSize,
+    phase: 'generating',
+  });
   const generatePromises: Promise<string[]>[] = [];
 
   // Since generateContent usually returns one image, we loop for batch size
@@ -670,7 +754,11 @@ export async function generateFusedCover(
         }
       }
       batchDone++;
-      onProgress?.(batchDone, settings.batchSize);
+      onProgress?.({
+        done: batchDone,
+        total: settings.batchSize,
+        phase: 'generating',
+      });
       return generatedUrls;
     });
 
@@ -681,6 +769,11 @@ export async function generateFusedCover(
   let results = resultsArrays.flat();
 
   if (settings.strictMode && !baseImage && sources.length >= 2 && results.length > 0) {
+    onProgress?.({
+      done: settings.batchSize,
+      total: settings.batchSize,
+      phase: 'strict',
+    });
     const runStrict = async (url: string): Promise<string> => {
       try {
         const { pass, issues } = await visionCheckFusionOutput(ai, sources, url);

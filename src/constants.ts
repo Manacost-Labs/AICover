@@ -1,4 +1,4 @@
-export const ASPECT_RATIOS = ["1:1", "3:4", "4:3", "9:16", "16:9", "21:9", "3:2", "2:3", "4:5", "5:4", "1:4", "1:8", "4:1", "8:1"];
+﻿export const ASPECT_RATIOS = ["1:1", "3:4", "4:3", "9:16", "16:9", "21:9", "3:2", "2:3", "4:5", "5:4", "1:4", "1:8", "4:1", "8:1"];
 export const RESOLUTIONS = ["512px", "1K", "2K", "4K"];
 
 export const GENERATION_MODELS = [
@@ -13,13 +13,32 @@ export const UPSCALE_EXPAND_MODELS = [
   { id: "gemini-3-pro-image-preview",     label: "Gemini 3 Pro",     desc: "Максимальная детализация текстур" },
 ] as const;
 
-/** Models that support the imageSize generation parameter. */
 export const MODELS_SUPPORTING_IMAGE_SIZE = new Set([
   "gemini-3.1-flash-image-preview",
   "gemini-3-pro-image-preview",
 ]);
 
-/** Models where 512px resolution is not available. */
 export const MODELS_NO_512PX = new Set([
   "gemini-3-pro-image-preview",
 ]);
+
+export const VEO_MODELS = [
+  { id: "veo-3.1-generate-preview", name: "Veo 3.1", desc: "Высокое качество" },
+  { id: "veo-3.1-fast-generate-preview", name: "Veo 3.1 Fast", desc: "Быстрее" },
+] as const;
+
+export const VEO_ASPECT_RATIOS = ["16:9", "9:16"] as const;
+
+export const VEO_RESOLUTIONS = [
+  { id: "720p", label: "720p" },
+  { id: "1080p", label: "1080p" },
+] as const;
+
+export type VeoCompressionPreset = "optimized" | "lossless";
+
+export const VEO_COMPRESSION_OPTIONS: { id: VeoCompressionPreset; label: string }[] = [
+  { id: "optimized", label: "Оптимизировано (меньше размер)" },
+  { id: "lossless", label: "Без потерь (больше размер)" },
+];
+
+export const VEO_DEFAULT_PROMPT = `A detailed fantasy illustration comes to life with minimal motion. Magical particles float slowly upward, fire flickers softly, water surface shimmers with subtle ripples. The composition stays locked — no zoom, no pan. Seamless loop, painterly style preserved.`;
