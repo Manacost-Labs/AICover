@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { OptimizedImage } from './OptimizedImage';
 import { ChevronDown, ChevronUp, Layers, Search, Loader2, X, Check } from 'lucide-react';
-import type { CardLibraryEntry } from '../services/supabaseService';
+import type { CardLibraryEntry } from '../services/serverStorageService';
 import { findLibraryCardsInDeck } from '../services/hearthstoneService';
 
 interface DeckImportSectionProps {

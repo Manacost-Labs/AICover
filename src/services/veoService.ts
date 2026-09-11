@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import type { ImageSource } from "./geminiService";
+import { createGeminiClient } from "./geminiClient";
 
 export type VeoProgressPhase = "submitting" | "polling" | "finalizing";
 
@@ -40,12 +41,8 @@ function parseOperationProgress(operation: unknown): number | undefined {
   return undefined;
 }
 
-async function fetchVideoUriToDataUrl(uri: string, apiKey: string): Promise<string> {
-  let res = await fetch(uri, { headers: { "x-goog-api-key": apiKey } });
-  if (!res.ok) {
-    const sep = uri.includes("?") ? "&" : "?";
-    res = await fetch(`${uri}${sep}key=${encodeURIComponent(apiKey)}`);
-  }
+async function fetchVideoUriToDataUrl(uri: string): Promise<string> {
+  const res = await fetch(`/api/gemini-media?url=${encodeURIComponent(uri)}`, { credentials: "same-origin" });
   if (!res.ok) throw new Error(`Не удалось скачать видео: HTTP ${res.status}`);
   const blob = await res.blob();
   return new Promise((resolve, reject) => {
@@ -58,7 +55,6 @@ async function fetchVideoUriToDataUrl(uri: string, apiKey: string): Promise<stri
 
 async function videoFromGeneratedEntry(
   vid: { videoBytes?: string; uri?: string; mimeType?: string } | undefined,
-  apiKey: string
 ): Promise<string> {
   if (!vid) throw new Error("Пустой video в ответе");
   if (vid.videoBytes) {
@@ -66,7 +62,7 @@ async function videoFromGeneratedEntry(
     return `data:${mt};base64,${vid.videoBytes}`;
   }
   if (vid.uri) {
-    return fetchVideoUriToDataUrl(vid.uri, apiKey);
+    return fetchVideoUriToDataUrl(vid.uri);
   }
   throw new Error("Нет ни videoBytes, ни uri в ответе");
 }
@@ -76,7 +72,6 @@ async function videoFromGeneratedEntry(
  */
 async function generateOneVeoVideo(
   ai: GoogleGenAI,
-  apiKey: string,
   sourceImage: ImageSource,
   basePrompt: string,
   options: Omit<VeoGenerateOptions, "batchSize">,
@@ -123,7 +118,7 @@ async function generateOneVeoVideo(
 
   onProgress({ phase: "finalizing", percent: 97 });
   const vid = operation.response?.generatedVideos?.[0]?.video;
-  const url = await videoFromGeneratedEntry(vid, apiKey);
+  const url = await videoFromGeneratedEntry(vid);
   onProgress({ phase: "finalizing", percent: 100 });
   return url;
 }
@@ -139,9 +134,6 @@ export async function generateVeoVideoFromImage(
   onProgress?: (u: VeoProgressUpdate) => void,
   signal?: AbortSignal
 ): Promise<string[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("API Key not found");
-
   const batchSize = Math.min(4, Math.max(1, options.batchSize ?? 1));
   const perRequest: Omit<VeoGenerateOptions, "batchSize"> = {
     model: options.model,
@@ -153,12 +145,11 @@ export async function generateVeoVideoFromImage(
 
   onProgress?.({ phase: "submitting", percent: 0 });
 
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
 
   if (batchSize === 1) {
     const url = await generateOneVeoVideo(
       ai,
-      apiKey,
       sourceImage,
       basePrompt,
       perRequest,
@@ -179,7 +170,6 @@ export async function generateVeoVideoFromImage(
   const tasks = Array.from({ length: batchSize }, (_, slot) =>
     generateOneVeoVideo(
       ai,
-      apiKey,
       sourceImage,
       basePrompt,
       perRequest,

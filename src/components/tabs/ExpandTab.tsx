@@ -56,9 +56,9 @@ export const ExpandTab: React.FC<ExpandTabProps> = ({
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-12">
+    <div className="cover-tool-page max-w-4xl mx-auto space-y-12">
       <section className="space-y-6 text-center">
-        <h2 className="text-3xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-b from-white to-zinc-500">
+        <h2 className="cover-tool-title text-3xl font-black tracking-tighter">
           Изменение формата (Expansion)
         </h2>
         <p className="text-zinc-400">
@@ -66,7 +66,7 @@ export const ExpandTab: React.FC<ExpandTabProps> = ({
         </p>
       </section>
 
-      <section className="bg-zinc-900/50 border border-white/5 rounded-[2.5rem] p-8 space-y-8">
+      <section className="cover-tab-panel bg-zinc-900/50 border border-white/5 rounded-[2.5rem] p-8 space-y-8">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-black uppercase tracking-[0.2em] text-zinc-300 flex items-center gap-2">
             <Settings className="w-4 h-4" />
@@ -96,7 +96,7 @@ export const ExpandTab: React.FC<ExpandTabProps> = ({
                       <button 
                         key={m.id}
                         onClick={() => setExpandSettings(s => ({ ...s, model: m.id }))}
-                        className={`p-4 rounded-2xl text-left transition-all border ${expandSettings.model === m.id ? 'bg-white border-white text-zinc-950 shadow-lg' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
+                        className={`p-4 rounded-2xl text-left transition-all border ${expandSettings.model === m.id ? 'cover-choice-active shadow-lg' : 'cover-choice-idle'}`}
                       >
                         <div className="font-bold text-xs">{m.label}</div>
                         <div className={`text-[10px] mt-1 ${expandSettings.model === m.id ? 'text-zinc-500' : 'text-zinc-600'}`}>{m.desc}</div>
@@ -112,7 +112,7 @@ export const ExpandTab: React.FC<ExpandTabProps> = ({
                       <button 
                         key={ratio}
                         onClick={() => setExpandSettings(s => ({ ...s, aspectRatio: ratio }))}
-                        className={`p-3 rounded-xl text-center transition-all border ${expandSettings.aspectRatio === ratio ? 'bg-white border-white text-zinc-950 shadow-lg' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
+                        className={`p-3 rounded-xl text-center transition-all border ${expandSettings.aspectRatio === ratio ? 'cover-choice-active shadow-lg' : 'cover-choice-idle'}`}
                       >
                         <div className="font-bold text-xs">{ratio}</div>
                       </button>
@@ -154,7 +154,7 @@ export const ExpandTab: React.FC<ExpandTabProps> = ({
             }
           }}
           tabIndex={0}
-          className={`relative aspect-video rounded-[3rem] border-2 border-dashed transition-all flex flex-col items-center justify-center gap-6 overflow-hidden bg-zinc-900/50 outline-none focus:ring-2 focus:ring-indigo-500/50 ${isDragging ? 'border-indigo-500 bg-indigo-500/5 scale-[1.01]' : 'border-white/10 hover:border-white/20'}`}
+          className={`cover-upload-workbench relative aspect-video rounded-[3rem] border-2 border-dashed transition-all flex flex-col items-center justify-center gap-6 overflow-hidden bg-zinc-900/50 outline-none focus:ring-2 focus:ring-indigo-500/50 ${isDragging ? 'border-indigo-500 bg-indigo-500/5 scale-[1.01]' : 'border-white/10 hover:border-white/20'}`}
         >
           {expandSource ? (
             <>

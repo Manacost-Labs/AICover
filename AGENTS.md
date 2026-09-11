@@ -6,7 +6,7 @@
 
 ## Назначение
 
-**Cover** — веб-приложение (React + Vite + TypeScript) для генерации **обложек** из нескольких изображений персонажей через **Google Gemini** (image + vision). Пользователь загружает 2–4 арта, опционально задаёт референс композиции, настраивает модель/формат/промпт и получает варианты обложки. Есть апскейл, расширение кадра (outpaint), история, избранное, библиотеки карт и референсов, синхронизация с **Supabase** при наличии конфигурации.
+**Cover** — веб-приложение (React + Vite + TypeScript) для генерации **обложек** из нескольких изображений персонажей через **Google Gemini** (image + vision). Пользователь загружает 2–4 арта, опционально задаёт референс композиции, настраивает модель/формат/промпт и получает варианты обложки. Есть апскейл, расширение кадра (outpaint), история, избранное, библиотеки карт и референсов. Данные хранятся в MySQL и файловом storage этого сервиса.
 
 Историческое имя в коде: «Fusion» (типы `FusionSource`, `generateFusedCover` и т.д.) — **не переименовывать без отдельной задачи**, это не пользовательский бренд.
 
@@ -18,9 +18,9 @@
 |------|------------|
 | UI | React 19, Tailwind CSS 4 (`@tailwindcss/vite`), `motion` (анимации), `lucide-react` |
 | Сборка | Vite 6, TypeScript 5.8 |
-| AI | `@google/genai` — ключ через `process.env.GEMINI_API_KEY` (inject в `vite.config.ts` из `.env`) |
+| AI | `@google/genai` — same-origin `/api/gemini` proxy; ключ хранится только на сервере |
 | Офлайн-хранилище | `idb-keyval` — IndexedDB |
-| Облако (опционально) | `@supabase/supabase-js` — история, избранное, библиотеки, публичные URL изображений |
+| Сервер | Express + MySQL (`server/index.js`) — API, media storage и Gemini proxy |
 | Прочее | `deckstrings` — импорт колод Hearthstone (см. `hearthstoneService.ts`) |
 
 ---
@@ -39,8 +39,11 @@ src/
     ResultCard.tsx, UpscaleResultCard.tsx, OptimizedImage.tsx, DeckImportSection.tsx
   services/
     geminiService.ts   # Генерация обложки, vision-QA, апскейл, expand, анализ референса/избранного
-    supabaseService.ts # CRUD облака + fallback на IDB, URL → ImageSource
+    thumbnailService.ts # Генерация art-only фонов для HS-обложек
+    hearthstoneAssetService.ts # Поиск игровых артов через db.kolodahs.ru
+    serverStorageService.ts # CRUD API сервиса + fallback на IDB, URL → ImageSource
     hearthstoneService.ts
+  features/thumbnail/  # Типы, шаблоны, промпт и Canvas-рендер HS-обложки
 ```
 
 Корень репозитория: `vite.config.ts`, `vercel.json`, `metadata.json` (имя приложения), `index.html`, `README.md`.
@@ -57,9 +60,8 @@ src/
 
 ## Переменные окружения
 
-- **`GEMINI_API_KEY`** — обязателен для вызовов Gemini; подставляется в клиентский бандл через `define` в Vite (**не коммитить** реальный ключ).
-
-Supabase: переменные читаются в `supabaseService.ts` (URL, anon key и т.д. — см. файл). Если не заданы, приложение работает на IndexedDB.
+- **`GEMINI_API_KEY`** — хранится в server-only environment file; браузер его не получает.
+- Параметры MySQL и storage — server-only environment file. Не коммитить реальные значения.
 
 ---
 
@@ -73,7 +75,7 @@ Supabase: переменные читаются в `supabaseService.ts` (URL, an
 
 **Не переименовывать** эти ключи без миграции — иначе потеряются данные у существующих пользователей.
 
-При настроенном Supabase данные дублируются/синхронизируются (см. `migrateFromIDB`, `loadHistory`, `saveToHistory`, избранное и библиотеки).
+IndexedDB остаётся локальным fallback. Основной источник данных — API Cover: история, избранное, библиотеки и media uploads.
 
 ---
 
@@ -83,13 +85,13 @@ Supabase: переменные читаются в `supabaseService.ts` (URL, an
 
 - **`generateFusedCover`** — основной pipeline: источники `FusionSource` (с опциональными `SceneRole`: left/center/right), референс, настройки, `baseImage` (режим доработки), `likedImages` (эталоны качества), `referenceCompositionNotes`.
 - **Vision:** анализ персонажей (`analyzeSourceCharactersForFusion`), при необходимости — описание композиции референса; ответы **укорачиваются** (`SOURCE_BRIEF_MAX_CHARS`), чтобы не раздувать промпт.
-- **Лайки/URL:** `likedUrlToInlineData` — поддержка `data:` и `http(s)` (fetch → base64) для бенчмарков из Supabase.
+- **Лайки/URL:** `likedUrlToInlineData` — поддержка `data:` и URL файлов из storage Cover.
 - **Strict mode:** после генерации — vision-QA и при необходимости refine; параллелизм **ограничен** (`STRICT_VISION_CONCURRENCY`), чтобы снизить 429/нестабильность.
 - Отдельно: `upscaleImage`, `expandImage`, `analyzeReferenceCompositionVision`, `analyzeFavoriteChoiceVision` и др.
 
-### `supabaseService.ts`
+### `serverStorageService.ts` и `server/index.js`
 
-Конфигурация клиента, загрузка файлов в Storage, маппинг URL, операции с историей/лайками/библиотеками, `imageUrlToImageSource` для vision.
+Клиент обращается к same-origin API. Express-сервис хранит метаданные в MySQL, media — в локальном storage, и проксирует допустимые Gemini-запросы, не раскрывая ключ браузеру.
 
 ### `hearthstoneService.ts`
 
@@ -102,12 +104,13 @@ Supabase: переменные читаются в `supabaseService.ts` (URL, an
 | id | Компонент | Назначение |
 |----|-----------|------------|
 | `create` | `CreateTab` | Источники, сцена/cover, референс, генерация, результаты |
-| `history` | `HistoryTab` | Локальная/облачная история |
+| `history` | `HistoryTab` | История сервиса с IDB fallback |
 | `favorites` | `FavoritesTab` | Избранное, анализ выбора (Gemini) |
 | `upscale` | `UpscaleTab` | Апскейл |
 | `expand` | `ExpandTab` | Outpaint / расширение |
 | `library` | `LibraryTab` | Библиотека карт |
 | `references` | `ReferencesTab` | Библиотека референсов |
+| `thumbnail` | `ThumbnailTab` | HS-обложки: игровые ассеты, Gemini-фон, точный Canvas-текст и PNG |
 
 Шапка: бренд **Cover**, переключение вкладок, при необходимости AI Studio API key (`window.aistudio`).
 
@@ -127,7 +130,7 @@ Supabase: переменные читаются в `supabaseService.ts` (URL, an
 
 ## Деплой
 
-`vercel.json` — правила для SPA. Сборка: `npm run build`, выход `dist/`.
+Сервис запускается systemd на production-сервере. Сборка: `npm run build`, выход `dist/`; Express раздаёт SPA и API.
 
 ---
 
@@ -144,7 +147,7 @@ Supabase: переменные читаются в `supabaseService.ts` (URL, an
 | Задача | Файлы |
 |--------|--------|
 | Генерация / промпты / токены | `src/services/geminiService.ts` |
-| Облако и IDB | `src/services/supabaseService.ts` |
+| Хранилище и IDB | `src/services/serverStorageService.ts` |
 | Создание обложки UI | `src/components/tabs/CreateTab.tsx` |
 | Глобальное состояние и табы | `src/App.tsx` |
 

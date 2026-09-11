@@ -19,7 +19,7 @@ import { sceneRolesOrder } from '../../services/geminiService';
 import { ResultCard } from '../ResultCard';
 import { DeckImportSection } from '../DeckImportSection';
 import { OptimizedImage } from '../OptimizedImage';
-import type { CardLibraryEntry, ReferenceLibraryEntry } from '../../services/supabaseService';
+import type { CardLibraryEntry, ReferenceLibraryEntry } from '../../services/serverStorageService';
 import { GENERATION_MODELS, MODELS_NO_512PX } from '../../constants';
 
 interface CreateTabProps {
@@ -151,11 +151,11 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   const [sceneDragOverRole, setSceneDragOverRole] = React.useState<SceneRole | null>(null);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+    <div className="cover-create-layout grid grid-cols-1 lg:grid-cols-12 gap-10">
       {/* Left Column: Controls */}
-      <div className="lg:col-span-4 space-y-10">
+      <div className="cover-create-controls lg:col-span-4 space-y-10">
           {/* Source Images */}
-          <section className="space-y-6">
+          <section className="cover-panel cover-source-panel space-y-6">
             <div className="flex flex-col gap-4">
               <div className="flex rounded-2xl bg-zinc-900/80 p-1 border border-white/5">
                 <button
@@ -233,13 +233,13 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                 </button>
               )}
             </div>
-            <div 
+            <div
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
               onPaste={(e) => handleLocalPaste(e, 'source')}
               tabIndex={0}
-              className={`${
+              className={`cover-upload-dropzone ${
                 createLayoutMode === 'cover' ? 'grid grid-cols-2' : `grid gap-3 ${scenePlan === 2 ? 'grid-cols-2' : 'grid-cols-3'}`
               } gap-4 p-3 rounded-[2.5rem] transition-all bg-zinc-900/50 border-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${isDragging ? 'bg-indigo-500/10 border-indigo-500/50 scale-[1.02]' : 'border-white/5'}`}
             >
@@ -380,7 +380,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
           </section>
 
           {/* Reference Composition */}
-          <section className="space-y-6">
+          <section className="cover-panel cover-reference-panel space-y-6">
             <h2 className="text-xs font-black uppercase tracking-[0.2em] text-zinc-500 flex items-center gap-2">
               <Layout className="w-4 h-4" />
               Референс композиции
@@ -449,7 +449,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
           </section>
 
           {/* Settings */}
-          <section className="space-y-8 bg-zinc-900/50 p-8 rounded-[2.5rem] border border-white/5 shadow-sm">
+          <section className="cover-panel cover-settings-panel space-y-8 bg-zinc-900/50 p-8 rounded-[2.5rem] border border-white/5 shadow-sm">
             <h2 className="text-xs font-black uppercase tracking-[0.2em] text-zinc-500 flex items-center gap-2">
               <Settings className="w-4 h-4" />
               Настройки
@@ -589,7 +589,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
         </div>
 
         {/* Right Column: Results */}
-        <div className="lg:col-span-8 space-y-6">
+        <div className="cover-create-output lg:col-span-8 space-y-6">
           {/* Deck Import */}
           <DeckImportSection
             cardLibrary={cardLibrary}
@@ -607,7 +607,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 1.05 }}
-                className="bg-zinc-900/50 rounded-[3rem] border border-white/5 min-h-[600px] flex items-center justify-center shadow-sm"
+                className="cover-result-state bg-zinc-900/50 rounded-[3rem] border border-white/5 min-h-[600px] flex items-center justify-center shadow-sm"
               >
                 <div className="flex flex-col items-center gap-8 text-center p-10">
                   <div className="relative">
@@ -736,7 +736,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                 key="empty"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="bg-zinc-900/50 rounded-[3rem] border border-white/5 min-h-[600px] flex items-center justify-center shadow-sm"
+                className="cover-result-state cover-result-empty bg-zinc-900/50 rounded-[3rem] border border-white/5 min-h-[600px] flex items-center justify-center shadow-sm"
               >
                 <div className="flex flex-col items-center gap-8 text-center p-10">
                   <div className="w-24 h-24 bg-zinc-900 rounded-[2rem] flex items-center justify-center border border-white/5 shadow-inner">

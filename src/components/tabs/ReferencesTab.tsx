@@ -1,9 +1,9 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Images, Plus, X, Trash2, Upload, Loader2, AlertTriangle, Settings } from 'lucide-react';
-import type { ReferenceLibraryEntry } from '../../services/supabaseService';
+import type { ReferenceLibraryEntry } from '../../services/serverStorageService';
 import { OptimizedImage } from '../OptimizedImage';
-import { isSupabaseConfigured, formatSupabaseClientError } from '../../services/supabaseService';
+import { formatStorageError } from '../../services/serverStorageService';
 
 interface ReferencesTabProps {
   referenceLibrary: ReferenceLibraryEntry[];
@@ -51,7 +51,7 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
       setFormImage(null);
       setShowForm(false);
     } catch (e: unknown) {
-      const msg = formatSupabaseClientError(e).trim() || 'Ошибка сохранения';
+      const msg = formatStorageError(e);
       setSaveError(msg);
     }
   };
@@ -68,7 +68,7 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
     : null;
 
   return (
-    <div className="space-y-10">
+    <div className="cover-tab-page space-y-10">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-4xl font-black tracking-tighter text-white">Референсы</h2>
@@ -78,22 +78,12 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
         </div>
         <button
           onClick={() => setShowForm(s => !s)}
-          className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-bold text-sm transition-all hover:scale-105 active:scale-95 ${showForm ? 'bg-zinc-800 text-zinc-400' : 'bg-white text-zinc-950 shadow-xl shadow-white/10'}`}
+          className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-bold text-sm transition-all hover:scale-105 active:scale-95 ${showForm ? 'cover-tab-action-muted' : 'cover-tab-action shadow-xl shadow-white/10'}`}
         >
           <Plus className="w-4 h-4" />
           Добавить референс
         </button>
       </div>
-
-      {!isSupabaseConfigured && (
-        <div className="p-5 bg-amber-500/10 border border-amber-500/20 rounded-3xl flex items-start gap-4 text-amber-400">
-          <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0" />
-          <div className="text-sm">
-            <p className="font-bold mb-1">Нужен Supabase</p>
-            <p className="text-amber-500/80 text-xs">Те же переменные, что и для библиотеки карт. Создайте таблицу reference_library (см. supabase/rls-anon-policies.sql).</p>
-          </div>
-        </div>
-      )}
 
       <AnimatePresence>
         {showForm && (
@@ -101,7 +91,7 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="bg-zinc-900/70 border border-white/10 rounded-[2.5rem] p-8 space-y-6"
+            className="cover-tab-panel bg-zinc-900/70 border border-white/10 rounded-[2.5rem] p-8 space-y-6"
           >
             <h3 className="text-xs font-black uppercase tracking-[0.2em] text-zinc-400 flex items-center gap-2">
               <Images className="w-4 h-4" />
@@ -151,7 +141,7 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
             {saveError && <p className="text-sm text-red-400 flex items-center gap-2"><AlertTriangle className="w-4 h-4" />{saveError}</p>}
             <div className="flex justify-end gap-3">
               <button type="button" onClick={handleCancel} className="px-6 py-2.5 text-sm font-bold text-zinc-400">Отмена</button>
-              <button type="button" onClick={handleSave} disabled={isSaving || !isSupabaseConfigured} className="px-8 py-2.5 bg-white text-zinc-950 font-black rounded-2xl text-sm disabled:opacity-50">
+              <button type="button" onClick={handleSave} disabled={isSaving} className="cover-tab-action px-8 py-2.5 font-black rounded-2xl text-sm disabled:opacity-50">
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin inline" /> : 'Сохранить'}
               </button>
             </div>
@@ -197,7 +187,7 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
                 <button
                   type="button"
                   onClick={() => onReanalyzeReference(detailEntry)}
-                  disabled={!isSupabaseConfigured || reanalyzingReferenceId === detailEntry.id}
+                  disabled={reanalyzingReferenceId === detailEntry.id}
                   className="px-6 py-2.5 rounded-2xl text-sm font-bold bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 flex items-center gap-2"
                 >
                   {reanalyzingReferenceId === detailEntry.id ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
@@ -237,7 +227,7 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
           ))}
         </div>
       ) : (
-        <div className="h-[320px] flex flex-col items-center justify-center rounded-[2rem] border border-white/5 bg-zinc-900/30 text-zinc-500 text-sm">
+        <div className="cover-tab-empty h-[320px] flex flex-col items-center justify-center rounded-[2rem] border border-white/5 bg-zinc-900/30 text-zinc-500 text-sm">
           Пока нет сохранённых референсов
         </div>
       )}

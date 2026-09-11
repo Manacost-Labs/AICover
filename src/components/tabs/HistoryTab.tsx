@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Film, Layout } from 'lucide-react';
 import { ResultCard } from '../ResultCard';
 import { VideoResultCard } from '../VideoResultCard';
-import { clearVideoHistory } from '../../services/supabaseService';
+import { clearHistory, clearVideoHistory } from '../../services/serverStorageService';
 
 interface HistoryTabProps {
   history: string[];
@@ -37,6 +37,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
 
   const clearImageHistory = () => {
     setHistory([]);
+    void clearHistory();
   };
 
   const clearVideoHistoryLocal = () => {
@@ -45,12 +46,12 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
   };
 
   return (
-    <div className="space-y-8">
+    <div className="cover-tab-page space-y-8">
       <div>
         <h2 className="text-4xl font-black tracking-tighter text-white">История</h2>
         <p className="text-zinc-500 mt-2">Последние генерации обложек и видео</p>
         <div
-          className="mt-5 inline-flex rounded-full bg-zinc-900/80 p-1 border border-white/10 shadow-inner"
+          className="cover-segmented-control mt-5 inline-flex rounded-full bg-zinc-900/80 p-1 border border-white/10 shadow-inner"
           role="tablist"
           aria-label="Тип контента"
         >
@@ -60,7 +61,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
             aria-selected={mediaKind === 'images'}
             onClick={() => setMediaKind('images')}
             className={`px-5 py-2 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${
-              mediaKind === 'images' ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-400 hover:text-white'
+              mediaKind === 'images' ? 'cover-segment-active shadow-md' : 'cover-segment-idle'
             }`}
           >
             <Layout className="w-4 h-4" />
@@ -72,7 +73,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
             aria-selected={mediaKind === 'videos'}
             onClick={() => setMediaKind('videos')}
             className={`px-5 py-2 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${
-              mediaKind === 'videos' ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-400 hover:text-white'
+              mediaKind === 'videos' ? 'cover-segment-active shadow-md' : 'cover-segment-idle'
             }`}
           >
             <Film className="w-4 h-4" />
@@ -116,7 +117,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
               ))}
             </div>
           ) : (
-            <div className="h-[min(400px,60vh)] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
+            <div className="cover-tab-empty h-[min(400px,60vh)] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
               <div className="w-16 h-16 bg-zinc-900 rounded-3xl flex items-center justify-center border border-white/5">
                 <Layout className="w-8 h-8 text-zinc-800" />
               </div>
@@ -157,7 +158,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
               ))}
             </div>
           ) : (
-            <div className="h-[min(400px,60vh)] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
+            <div className="cover-tab-empty h-[min(400px,60vh)] flex flex-col items-center justify-center text-center space-y-4 bg-zinc-900/50 rounded-[3rem] border border-white/5">
               <div className="w-16 h-16 bg-zinc-900 rounded-3xl flex items-center justify-center border border-white/5">
                 <Film className="w-8 h-8 text-zinc-800" />
               </div>

@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { MODELS_SUPPORTING_IMAGE_SIZE } from "../constants";
+import { createGeminiClient } from "./geminiClient";
 
 /** Multimodal vision for composition / QA (not the image generator). */
 const VISION_MODEL = "gemini-3.1-flash-lite-preview";
@@ -134,14 +135,14 @@ function truncateUtf16(text: string, maxLen: number): string {
 
 /**
  * Favorite / benchmark image URL → Gemini inlineData payload.
- * Supports data URLs and http(s) (e.g. Supabase public URLs after migration).
+ * Supports data URLs and http(s) public URLs from the Cover service.
  */
 export async function likedUrlToInlineData(likedUrl: string): Promise<{ data: string; mimeType: string } | null> {
   const dataMatch = likedUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
   if (dataMatch) {
     return { data: dataMatch[2], mimeType: dataMatch[1] };
   }
-  if (likedUrl.startsWith("http://") || likedUrl.startsWith("https://")) {
+  if (likedUrl.startsWith("/") || likedUrl.startsWith("http://") || likedUrl.startsWith("https://")) {
     try {
       const res = await fetch(likedUrl);
       if (!res.ok) return null;
@@ -207,11 +208,7 @@ Rules:
  * Returns JSON string or raw model text if JSON parsing fails downstream.
  */
 export async function analyzeReferenceCompositionVision(image: ImageSource): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   try {
     const res = await ai.models.generateContent({
       model: VISION_MODEL,
@@ -261,11 +258,7 @@ export async function analyzeFavoriteChoiceVision(
   alternatives: ImageSource[],
   options?: { userPromptHint?: string }
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   const hint = options?.userPromptHint?.trim();
   const parts: any[] = [
     {
@@ -328,11 +321,7 @@ export async function analyzeFavoriteVideoChoiceVision(
   alternatives: ImageSource[],
   options?: { userPromptHint?: string }
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   const hint = options?.userPromptHint?.trim();
   const parts: any[] = [
     {
@@ -560,13 +549,9 @@ export async function generateFusedCover(
   referenceCompositionNotes: string | null = null,
   onProgress?: (p: CoverGenerationProgress) => void
 ): Promise<string[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   const model = settings.model;
+  const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
 
   onProgress?.({
     done: 0,
@@ -658,12 +643,12 @@ export async function generateFusedCover(
     });
 
     // Add base image if refining
-    if (baseImage) {
+    if (normalizedBaseImage) {
       parts.push({ text: "BASE IMAGE TO REFINE (TEMPLATE):" });
       parts.push({
         inlineData: {
-          data: baseImage.data.split(",")[1] || baseImage.data,
-          mimeType: baseImage.mimeType,
+          data: normalizedBaseImage.data,
+          mimeType: normalizedBaseImage.mimeType,
         },
       });
     }
@@ -799,10 +784,10 @@ export async function generateFusedCover(
 
 /**
  * Normalize an ImageSource to base64 inlineData.
- * Handles both data URLs and http(s) public URLs (e.g. Supabase storage).
+ * Handles both data URLs and http(s) public URLs from server storage.
  */
-async function normalizeImageSource(image: ImageSource): Promise<{ data: string; mimeType: string }> {
-  if (image.data.startsWith("http://") || image.data.startsWith("https://")) {
+export async function normalizeImageSource(image: ImageSource): Promise<{ data: string; mimeType: string }> {
+  if (image.data.startsWith("/") || image.data.startsWith("http://") || image.data.startsWith("https://")) {
     const inline = await likedUrlToInlineData(image.data);
     if (!inline) throw new Error(`Failed to fetch image from URL: ${image.data}`);
     return inline;
@@ -815,12 +800,7 @@ export async function upscaleImage(
   targetSize: "1K" | "2K" | "4K" = "4K",
   model: string = "gemini-3.1-flash-image-preview"
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   const normalized = await normalizeImageSource(image);
 
   const imageConfig: any = {};
@@ -865,12 +845,7 @@ export async function expandImage(
   prompt: string = "",
   model: string = "gemini-3.1-flash-image-preview"
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   const normalized = await normalizeImageSource(image);
 
   const response = await ai.models.generateContent({

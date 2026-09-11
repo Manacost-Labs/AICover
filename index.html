@@ -6,6 +6,18 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preload" href="/fonts/cover-display.otf" as="font" type="font/otf" crossorigin />
+    <script>
+      (() => {
+        try {
+          const savedTheme = localStorage.getItem('cover_theme');
+          document.documentElement.dataset.theme = savedTheme === 'dark' || savedTheme === 'light'
+            ? savedTheme
+            : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        } catch {
+          document.documentElement.dataset.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+      })();
+    </script>
     <title>Cover</title>
   </head>
   <body>
@@ -13,4 +25,3 @@
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

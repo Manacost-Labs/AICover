@@ -1,6 +1,6 @@
 import { decode } from 'deckstrings';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
-import type { CardLibraryEntry } from './supabaseService';
+import type { CardLibraryEntry } from './serverStorageService';
 
 const HS_CARDS_CACHE_KEY = 'hs_cards_cache';
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours

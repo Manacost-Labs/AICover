@@ -118,7 +118,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
   const canRun = !!sourceImage && !isGenerating;
 
   return (
-    <div id="video-tab" className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+    <div id="video-tab" className="cover-tab-page grid grid-cols-1 lg:grid-cols-12 gap-10">
       <div className="lg:col-span-4 space-y-8">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
@@ -156,7 +156,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
             >
               <OptimizedImage src={sourceImage.data} alt="" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
               {isDragging && (
-                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-zinc-950/60 backdrop-blur-sm pointer-events-none">
+                <div className="cover-dark-overlay absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-zinc-950/60 backdrop-blur-sm pointer-events-none">
                   <Upload className="w-10 h-10 text-indigo-400" />
                   <span className="text-sm font-bold text-white">Отпустите, чтобы заменить кадр</span>
                 </div>
@@ -190,7 +190,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
           )}
         </section>
 
-        <section id="veo-section-prompt" className="space-y-6 bg-zinc-900/50 p-6 rounded-[2rem] border border-white/5 scroll-mt-24">
+        <section id="veo-section-prompt" className="cover-tab-panel space-y-6 bg-zinc-900/50 p-6 rounded-[2rem] border border-white/5 scroll-mt-24">
           <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Промпт</h3>
           <CollapsibleSection
             title="Базовый промпт Veo"
@@ -213,7 +213,7 @@ export const VideoTab: React.FC<VideoTabProps> = ({
           </div>
         </section>
 
-        <section id="veo-section-params" className="space-y-4 bg-zinc-900/50 p-6 rounded-[2rem] border border-white/5 scroll-mt-24">
+        <section id="veo-section-params" className="cover-tab-panel space-y-4 bg-zinc-900/50 p-6 rounded-[2rem] border border-white/5 scroll-mt-24">
           <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Параметры Veo</h3>
           <div id="veo-section-model" className="space-y-2">
             <span className="text-[10px] font-bold text-zinc-500 uppercase">Модель</span>
@@ -225,8 +225,8 @@ export const VideoTab: React.FC<VideoTabProps> = ({
                   onClick={() => setVeoSettings((s) => ({ ...s, model: m.id }))}
                   className={`px-4 py-2.5 rounded-xl text-left text-xs font-bold border ${
                     veoSettings.model === m.id
-                      ? "bg-white text-zinc-950 border-white"
-                      : "bg-white/5 border-white/10 text-zinc-400"
+                      ? "cover-choice-active"
+                      : "cover-choice-idle"
                   }`}
                 >
                   {m.name} — {m.desc}

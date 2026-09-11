@@ -2,8 +2,8 @@ import React, { useState, useRef } from 'react';
 import { OptimizedImage } from '../OptimizedImage';
 import { motion, AnimatePresence } from 'motion/react';
 import { BookOpen, Plus, X, Trash2, Upload, Loader2, AlertTriangle } from 'lucide-react';
-import type { CardLibraryEntry } from '../../services/supabaseService';
-import { isSupabaseConfigured, formatSupabaseClientError } from '../../services/supabaseService';
+import type { CardLibraryEntry } from '../../services/serverStorageService';
+import { formatStorageError } from '../../services/serverStorageService';
 
 interface LibraryTabProps {
   cardLibrary: CardLibraryEntry[];
@@ -48,7 +48,7 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
       setFormImage(null);
       setShowForm(false);
     } catch (e: unknown) {
-      setSaveError(formatSupabaseClientError(e) || 'Ошибка сохранения');
+      setSaveError(formatStorageError(e));
     }
   };
 
@@ -61,7 +61,7 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
   };
 
   return (
-    <div className="space-y-10">
+    <div className="cover-tab-page space-y-10">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -74,35 +74,12 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
         </div>
         <button
           onClick={() => setShowForm(s => !s)}
-          className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-bold text-sm transition-all hover:scale-105 active:scale-95 ${showForm ? 'bg-zinc-800 text-zinc-400' : 'bg-white text-zinc-950 shadow-xl shadow-white/10'}`}
+          className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-bold text-sm transition-all hover:scale-105 active:scale-95 ${showForm ? 'cover-tab-action-muted' : 'cover-tab-action shadow-xl shadow-white/10'}`}
         >
           <Plus className="w-4 h-4" />
           Добавить карту
         </button>
       </div>
-
-      {/* Supabase warning */}
-      {!isSupabaseConfigured && (
-        <div className="p-5 bg-amber-500/10 border border-amber-500/20 rounded-3xl flex items-start gap-4 text-amber-400">
-          <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0" />
-          <div className="text-sm">
-            <p className="font-bold mb-1">Supabase не настроен</p>
-            <p className="text-amber-500/80 text-xs leading-relaxed space-y-2">
-              <span className="block">
-                Библиотека карт требует Supabase. В Vercel → Environment Variables задайте оба значения и сделайте <strong className="text-amber-400">Redeploy</strong>.
-              </span>
-              <span className="block">
-                <code className="bg-amber-500/10 px-1 rounded">VITE_SUPABASE_URL</code> — полный URL вида{' '}
-                <code className="bg-amber-500/10 px-1 rounded">https://&lt;project-ref&gt;.supabase.co</code> (не только id проекта).
-              </span>
-              <span className="block">
-                <code className="bg-amber-500/10 px-1 rounded">VITE_SUPABASE_ANON_KEY</code> — <strong className="text-amber-400">Publishable key</strong> (начинается с{' '}
-                <code className="bg-amber-500/10 px-1 rounded">sb_publishable_</code>) или старый <strong className="text-amber-400">anon public</strong> JWT (вкладка Legacy). <strong className="text-amber-400">Secret key</strong> в браузер не вставлять.
-              </span>
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Add card form */}
       <AnimatePresence>
@@ -111,7 +88,7 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="bg-zinc-900/70 border border-white/10 rounded-[2.5rem] p-8 space-y-6"
+            className="cover-tab-panel bg-zinc-900/70 border border-white/10 rounded-[2.5rem] p-8 space-y-6"
           >
             <h3 className="text-xs font-black uppercase tracking-[0.2em] text-zinc-400 flex items-center gap-2">
               <Plus className="w-4 h-4" />
@@ -205,8 +182,8 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
               </button>
               <button
                 onClick={handleSave}
-                disabled={isSaving || !isSupabaseConfigured}
-                className="px-8 py-2.5 bg-white text-zinc-950 font-black rounded-2xl hover:bg-zinc-100 transition-all hover:scale-105 active:scale-95 text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isSaving}
+                className="cover-tab-action px-8 py-2.5 font-black rounded-2xl transition-all hover:scale-105 active:scale-95 text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                 {isSaving ? 'Сохраняем...' : 'Сохранить'}
@@ -235,7 +212,7 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
                 referrerPolicy="no-referrer"
               />
               {/* Card info overlay */}
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-zinc-950/95 via-zinc-950/30 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col justify-end p-3 gap-1">
+              <div className="cover-dark-overlay pointer-events-none absolute inset-0 bg-gradient-to-t from-zinc-950/95 via-zinc-950/30 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col justify-end p-3 gap-1">
                 <p className="text-white font-bold text-xs leading-tight">{entry.name}</p>
                 <p className="text-zinc-400 font-mono text-[9px]">{entry.cardId}</p>
               </div>
@@ -253,7 +230,7 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
         </div>
       ) : (
         !showForm && (
-          <div className="h-[400px] flex flex-col items-center justify-center text-center space-y-6 bg-zinc-900/50 rounded-[3rem] border border-white/5">
+          <div className="cover-tab-empty h-[400px] flex flex-col items-center justify-center text-center space-y-6 bg-zinc-900/50 rounded-[3rem] border border-white/5">
             <div className="w-24 h-24 bg-zinc-900 rounded-[2rem] flex items-center justify-center border border-white/5">
               <BookOpen className="w-12 h-12 text-zinc-800" />
             </div>
@@ -265,7 +242,7 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
             </div>
             <button
               onClick={() => setShowForm(true)}
-              className="px-8 py-3 bg-white text-zinc-950 font-bold rounded-2xl hover:bg-zinc-100 transition-all text-sm"
+              className="cover-tab-action px-8 py-3 font-bold rounded-2xl transition-all text-sm"
             >
               + Добавить первую карту
             </button>
