@@ -6,6 +6,32 @@ function modelEndpointUrl(modelId) {
   return `${OPENROUTER_IMAGE_MODEL_ORIGIN}/api/v1/images/models/${path}/endpoints`;
 }
 
+async function readBoundedResponseBytes(response) {
+  if (!response.body?.getReader) {
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return bytes.byteLength <= MAX_CATALOG_RESPONSE_BYTES ? bytes : null;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_CATALOG_RESPONSE_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, totalBytes);
+}
+
 async function readEndpointAvailability(modelId, fetchImpl, timeoutMs) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -17,8 +43,8 @@ async function readEndpointAvailability(modelId, fetchImpl, timeoutMs) {
     if (!response.ok) return 'unknown';
     const declaredLength = Number(response.headers.get('content-length') || 0);
     if (declaredLength > MAX_CATALOG_RESPONSE_BYTES) return 'unknown';
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.byteLength > MAX_CATALOG_RESPONSE_BYTES) return 'unknown';
+    const bytes = await readBoundedResponseBytes(response);
+    if (!bytes) return 'unknown';
     const payload = JSON.parse(bytes.toString('utf8'));
     const endpoints = Array.isArray(payload?.endpoints)
       ? payload.endpoints

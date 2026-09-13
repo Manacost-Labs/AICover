@@ -62,16 +62,22 @@ describe('Create editor contract', () => {
     await render(props({ sources: [source('a'), source('b')], results: ['data:image/png;base64,result'] }));
     expect(container.querySelector('[data-result-reveal="true"]')).not.toBeNull();
   });
-  it('keeps the 512px model restriction in native format controls', async () => {
+  it('shows only documented sizes for the selected Gemini model', async () => {
     const options = props(); options.settings.model = [...MODELS_NO_512PX][0]; await render(options);
     expect(container.querySelector<HTMLOptionElement>('option[value="512px"]')!.disabled).toBe(true);
-    expect(container.textContent).toContain('от 1K');
+    expect(container.querySelector<HTMLOptionElement>('option[value="2K"]')!.disabled).toBe(true);
+    expect(container.textContent).toContain('Доступные размеры: 1K');
+  });
+  it('disables undocumented extreme ratios for Gemini Pro', async () => {
+    const options = props({ ASPECT_RATIOS: ['16:9', '1:4'] }); options.settings.model = 'gemini-3-pro-image'; await render(options);
+    expect(container.querySelector<HTMLOptionElement>('option[value="16:9"]')!.disabled).toBe(false);
+    expect(container.querySelector<HTMLOptionElement>('option[value="1:4"]')!.disabled).toBe(true);
   });
   it('coerces 512px to 1K when Pro is selected through the logo picker', async () => {
     const options = props(); options.settings.imageSize = '512px'; await render(options);
-    await act(async () => container.querySelector<HTMLInputElement>('.model-picker input[value="gemini-3-pro-image-preview"]')!.click());
+    await act(async () => container.querySelector<HTMLInputElement>('.model-picker input[value="gemini-3-pro-image"]')!.click());
     const next = options.setSettings.mock.calls[0][0](options.settings);
-    expect(next).toMatchObject({ model: 'gemini-3-pro-image-preview', imageSize: '1K' });
+    expect(next).toMatchObject({ model: 'gemini-3-pro-image', imageSize: '1K' });
     expect(next.prompt).toBe(options.settings.prompt);
   });
   it('announces upscale progress and prevents competing generation while keeping downloads available', async () => {

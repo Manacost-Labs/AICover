@@ -31,7 +31,7 @@ beforeEach(async () => {
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   const tools = {
     source: { data: 'data:image/png;base64,previous', mimeType: 'image/png', name: 'Previous.png' }, setSource,
-    settings: { model: 'gemini-3.1-flash-image-preview', aspectRatio: '16:9', imageSize: '4K', prompt: '' },
+    settings: { model: 'gemini-3.1-flash-image', aspectRatio: '16:9', imageSize: '4K', prompt: '' },
     results: [], operation: 'expand', busy: false,
   } as unknown as ImageToolsController;
   await act(async () => root.render(React.createElement(ImageToolsTab, { tools, available: true, onFullscreen: vi.fn(), onRefine: vi.fn() })));

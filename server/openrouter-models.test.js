@@ -33,4 +33,28 @@ describe('OpenRouter model availability', () => {
       { id: 'openai/gpt-image-2', availability: 'unknown' },
     ]);
   });
+
+  it('cancels a catalog response that exceeds the byte limit without a content-length', async () => {
+    let cancelled = false;
+    const oversized = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(65 * 1024));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const availability = createOpenRouterModelAvailability({
+      modelIds: ['openai/gpt-image-2'],
+      fetchImpl: async () => new Response(oversized, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    });
+
+    assert.deepEqual(await availability.list(), [
+      { id: 'openai/gpt-image-2', availability: 'unknown' },
+    ]);
+    assert.equal(cancelled, true);
+  });
 });

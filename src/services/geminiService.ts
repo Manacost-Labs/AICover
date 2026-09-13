@@ -1,5 +1,5 @@
 import type { GoogleGenAI } from "@google/genai";
-import { MODELS_SUPPORTING_IMAGE_SIZE } from "../constants";
+import { MODELS_SUPPORTING_IMAGE_SIZE, normalizeGeminiImageSettings } from "../constants";
 import { CHATGPT_IMAGE_MODEL, MAX_CHATGPT_IMAGE_REFERENCES, createChatGPTImageGenerator, type ChatGPTImageReference } from "./chatgptImages";
 import { createGeminiClient } from "./geminiClient";
 import { generateOpenRouterImage, getOpenRouterModel, isOpenRouterImageModel, type OpenRouterImageReference } from "./openRouterImages";
@@ -745,6 +745,10 @@ export async function generateFusedCover(
   if (isOpenRouterImageModel(settings.model)) {
     return generateOpenRouterFusedCover(sources, reference, settings, baseImage, likedImages, referenceCompositionNotes, onProgress, signal, onResult);
   }
+  settings = {
+    ...settings,
+    ...normalizeGeminiImageSettings(settings.model, settings.imageSize, settings.aspectRatio),
+  } as GenerationSettings;
   const ai = await createGeminiClient();
   const model = settings.model;
   const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
@@ -804,7 +808,13 @@ export async function generateFusedCover(
   // and to allow batch promises to run truly in parallel (no serial awaits inside loop).
   const likedInlineData: Array<{ data: string; mimeType: string }> = [];
   if (likedImages.length > 0) {
-    const recentLikes = likedImages.slice(0, 3);
+    // Gemini 2.5 is documented to work best with up to three input images.
+    // Required source/base images always win; only optional quality examples are trimmed.
+    const requiredGenerationImages = sources.length + Number(Boolean(normalizedBaseImage));
+    const optionalReferenceLimit = model === "gemini-2.5-flash-image"
+      ? Math.max(0, 3 - requiredGenerationImages)
+      : 3;
+    const recentLikes = likedImages.slice(0, optionalReferenceLimit);
     for (const likedUrl of recentLikes) {
       try {
         const inline = await likedUrlToInlineData(likedUrl);
@@ -881,7 +891,7 @@ export async function generateFusedCover(
     ${sceneLayout ? sceneLayout : ""}
     ${compositionDescription ? `LAYOUT (reference template — spatial only):\n- ${compositionDescription}\n- Do NOT copy template scenery, palette, or character designs from the template.\n- Match scale and framing only.` : ""}`
         : `TASK: MASTER COMPOSITING — PHOTO-COMPOSITE, NOT RE-ILLUSTRATION.
-    The image model (Gemini 3.1 Flash Image) must treat SOURCE images as UNTOUCHABLE identity references.
+    The selected image model must treat SOURCE images as UNTOUCHABLE identity references.
     RULES:
     1. ZERO REDRAW / ZERO "IMPROVING": Do not repaint faces, skin, hair, eyes, or costumes. No beautification, no style drift.
     2. COMPOSITE LIKE REAL PHOTO LAYERS: Only perspective warp, scale, blend edges, and relight onto ONE shared environment.
@@ -994,14 +1004,15 @@ export async function normalizeImageSource(image: ImageSource): Promise<{ data: 
 export async function upscaleImage(
   image: ImageSource,
   targetSize: "1K" | "2K" | "4K" = "4K",
-  model: string = "gemini-3.1-flash-image-preview"
+  model: string = "gemini-3.1-flash-image"
 ): Promise<string> {
   const ai = await createGeminiClient();
   const normalized = await normalizeImageSource(image);
+  const normalizedTargetSize = normalizeGeminiImageSettings(model, targetSize, "16:9").imageSize as "1K" | "2K" | "4K";
 
   const imageConfig: any = {};
   if (MODELS_SUPPORTING_IMAGE_SIZE.has(model)) {
-    imageConfig.imageSize = targetSize;
+    imageConfig.imageSize = normalizedTargetSize;
   }
 
   const response = await ai.models.generateContent({
@@ -1015,7 +1026,7 @@ export async function upscaleImage(
           },
         },
         { text: `UPSCALE TASK: Act as a high-end image restoration and super-resolution engine. 
-                 Enhance this image to ${targetSize} resolution. 
+                 Enhance this image to ${normalizedTargetSize} resolution.
                  Improve clarity, sharpen edges, remove compression artifacts, and enhance fine details (textures, hair, skin, materials). 
                  DO NOT change the content, composition, or colors. 
                  The output must be a pixel-perfect, high-resolution version of the input.` },
@@ -1039,10 +1050,11 @@ export async function expandImage(
   image: ImageSource,
   targetAspectRatio: "1:1" | "1:4" | "1:8" | "2:3" | "3:2" | "3:4" | "4:1" | "4:3" | "4:5" | "5:4" | "8:1" | "9:16" | "16:9" | "21:9",
   prompt: string = "",
-  model: string = "gemini-3.1-flash-image-preview"
+  model: string = "gemini-3.1-flash-image"
 ): Promise<string> {
   const ai = await createGeminiClient();
   const normalized = await normalizeImageSource(image);
+  const normalizedAspectRatio = normalizeGeminiImageSettings(model, "1K", targetAspectRatio).aspectRatio as typeof targetAspectRatio;
 
   const response = await ai.models.generateContent({
     model,
@@ -1054,7 +1066,7 @@ export async function expandImage(
             mimeType: normalized.mimeType,
           },
         },
-        { text: `OUTPAINTING TASK: Expand this image to a ${targetAspectRatio} aspect ratio. 
+        { text: `OUTPAINTING TASK: Expand this image to a ${normalizedAspectRatio} aspect ratio.
                  Maintain the original style, lighting, and content. 
                  Seamlessly extend the background and edges to fill the new frame. 
                  ${prompt ? `USER GUIDANCE: ${prompt}` : "Ensure the expansion is natural and consistent with the original scene."}` },
@@ -1062,7 +1074,7 @@ export async function expandImage(
     },
     config: {
       imageConfig: {
-        aspectRatio: targetAspectRatio,
+        aspectRatio: normalizedAspectRatio,
       },
     },
   });

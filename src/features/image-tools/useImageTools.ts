@@ -34,7 +34,7 @@ export function useImageTools(options: {
   const [source, setSource] = useState<ToolSource | null>(null);
   const [operation, setOperation] = useState<ImageToolOperation>("expand");
   const [settings, setSettings] = useState<ToolSettings>({
-    model: "gemini-3.1-flash-image-preview",
+    model: "gemini-3.1-flash-image",
     imageSize: "4K",
     aspectRatio: "16:9",
     prompt: "",

@@ -96,6 +96,7 @@ describe('OpenRouter image client adapter', () => {
     ['OPENROUTER_CREDITS', 'балансе OpenRouter'],
     ['REFERENCE_PAYLOAD_TOO_LARGE', 'Cover уже сжал'],
     ['UNSUPPORTED_PARAMETERS', 'параметры'],
+    ['PROVIDER_RETRY_EXHAUSTED', 'автоматической повторной попытки'],
     ['PROVIDER_UNAVAILABLE', 'временно недоступен'],
   ])('maps safe error code %s to actionable copy', async (code, message) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({

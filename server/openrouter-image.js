@@ -4,6 +4,9 @@ const MAX_TOTAL_REFERENCE_BYTES = 24 * 1024 * 1024;
 const RIVERFLOW_REFERENCE_BYTES = 3 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_UPSTREAM_RESPONSE_BYTES = 23 * 1024 * 1024;
+const MAX_OPENROUTER_ATTEMPTS = 2;
+const MAX_OPENROUTER_RETRY_DELAY_MS = 5_000;
+const RETRYABLE_OPENROUTER_STATUSES = new Set([429, 502, 503, 524, 529]);
 const ALLOWED_INPUT_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_OUTPUT_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -312,37 +315,90 @@ export async function extractOpenRouterImageResponse(response) {
   return extractOpenRouterImage(payload);
 }
 
+function openRouterRetryDelayMs(response, attempt, now = Date.now()) {
+  const retryAfter = response?.headers?.get?.('retry-after');
+  let delayMs;
+  if (retryAfter != null && String(retryAfter).trim() !== '') {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      delayMs = seconds * 1_000;
+    } else {
+      const retryAt = Date.parse(retryAfter);
+      if (Number.isFinite(retryAt)) delayMs = Math.max(0, retryAt - now);
+    }
+  }
+  if (!Number.isFinite(delayMs)) delayMs = 750 * (2 ** Math.max(0, attempt - 1));
+  return Math.min(MAX_OPENROUTER_RETRY_DELAY_MS, Math.max(0, Math.round(delayMs)));
+}
+
+function waitForOpenRouterRetry(delayMs, signal) {
+  if (signal.aborted) return Promise.reject(new DOMException('aborted', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(new DOMException('aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export async function requestOpenRouterImage(requestBody, apiKey, options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const sleepImpl = options.sleepImpl || waitForOpenRouterRetry;
+  const maxAttempts = Math.max(1, Math.min(
+    MAX_OPENROUTER_ATTEMPTS,
+    Number.isInteger(options.maxAttempts) ? options.maxAttempts : MAX_OPENROUTER_ATTEMPTS,
+  ));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 300_000);
   try {
-    const upstream = await fetchImpl('https://openrouter.ai/api/v1/images', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: buildOpenRouterRequestHeaders(apiKey),
-      body: JSON.stringify(requestBody),
-    });
-    if (!upstream.ok) {
-      await upstream.body?.cancel?.().catch(() => {});
-      const failures = {
-        400: ['Выбранные параметры не поддерживаются моделью', 422, 'UNSUPPORTED_PARAMETERS'],
-        401: ['Серверный ключ OpenRouter отклонён', 503, 'OPENROUTER_AUTH'],
-        403: ['Серверный ключ OpenRouter не имеет доступа к модели', 503, 'OPENROUTER_AUTH'],
-        402: ['На балансе OpenRouter недостаточно средств', 402, 'OPENROUTER_CREDITS'],
-        404: ['У модели сейчас нет активного endpoint OpenRouter', 503, 'MODEL_UNAVAILABLE'],
-        413: ['Референсы превышают лимит выбранного провайдера', 413, 'REFERENCE_PAYLOAD_TOO_LARGE'],
-        422: ['Выбранные параметры не поддерживаются моделью', 422, 'UNSUPPORTED_PARAMETERS'],
-        429: ['Сервис генерации занят. Попробуйте немного позже.', 429, 'RATE_LIMITED'],
-      };
-      const [message, status, code] = failures[upstream.status]
-        || (upstream.status >= 500
-          ? ['Провайдер модели временно недоступен', 503, 'PROVIDER_UNAVAILABLE']
-          : ['Провайдер модели отклонил запрос', 502, 'PROVIDER_REJECTED']);
-      throw validationError(message, status, code);
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const upstream = await fetchImpl('https://openrouter.ai/api/v1/images', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: buildOpenRouterRequestHeaders(apiKey),
+        body: JSON.stringify(requestBody),
+      });
+      if (!upstream.ok) {
+        await upstream.body?.cancel?.().catch(() => {});
+        if (RETRYABLE_OPENROUTER_STATUSES.has(upstream.status) && attempt < maxAttempts) {
+          const retryDelayMs = openRouterRetryDelayMs(upstream, attempt, options.now?.() ?? Date.now());
+          options.onRetry?.({ attempt, nextAttempt: attempt + 1, status: upstream.status, delayMs: retryDelayMs });
+          await sleepImpl(retryDelayMs, controller.signal);
+          continue;
+        }
+        const failures = {
+          400: ['Выбранные параметры не поддерживаются моделью', 422, 'UNSUPPORTED_PARAMETERS'],
+          401: ['Серверный ключ OpenRouter отклонён', 503, 'OPENROUTER_AUTH'],
+          403: ['Серверный ключ OpenRouter не имеет доступа к модели', 503, 'OPENROUTER_AUTH'],
+          402: ['На балансе OpenRouter недостаточно средств', 402, 'OPENROUTER_CREDITS'],
+          404: ['У модели сейчас нет активного endpoint OpenRouter', 503, 'MODEL_UNAVAILABLE'],
+          413: ['Референсы превышают лимит выбранного провайдера', 413, 'REFERENCE_PAYLOAD_TOO_LARGE'],
+          422: ['Выбранные параметры не поддерживаются моделью', 422, 'UNSUPPORTED_PARAMETERS'],
+          429: ['Сервис генерации занят. Попробуйте немного позже.', 429, 'RATE_LIMITED'],
+        };
+        const retryExhausted = attempt > 1 && RETRYABLE_OPENROUTER_STATUSES.has(upstream.status);
+        const [message, status, code] = failures[upstream.status]
+          || (upstream.status >= 500
+            ? [
+              retryExhausted
+                ? 'Провайдер модели не ответил после повторной попытки'
+                : 'Провайдер модели временно недоступен',
+              503,
+              retryExhausted ? 'PROVIDER_RETRY_EXHAUSTED' : 'PROVIDER_UNAVAILABLE',
+            ]
+            : ['Провайдер модели отклонил запрос', 502, 'PROVIDER_REJECTED']);
+        throw Object.assign(validationError(message, status, code), { attempts: attempt });
+      }
+      // Keep the timeout active until the complete bounded response has arrived.
+      return await extractOpenRouterImageResponse(upstream);
     }
-    // Keep the timeout active until the complete bounded response has arrived.
-    return await extractOpenRouterImageResponse(upstream);
+    throw validationError('Провайдер модели временно недоступен', 503, 'PROVIDER_UNAVAILABLE');
   } catch (error) {
     if (error?.name === 'AbortError') {
       throw validationError('Генерация превысила лимит времени', 504, 'PROVIDER_TIMEOUT');

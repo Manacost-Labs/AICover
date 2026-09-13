@@ -52,7 +52,13 @@ import {
   type CardLibraryEntry,
   type ReferenceLibraryEntry,
 } from './services/serverStorageService';
-import { ASPECT_RATIOS, RESOLUTIONS, MODELS_NO_512PX } from './constants';
+import {
+  ASPECT_RATIOS,
+  RESOLUTIONS,
+  normalizeGeminiImageSettings,
+  supportsGeminiAspectRatio,
+  supportsGeminiImageSize,
+} from './constants';
 import { getOpenRouterModel, isOpenRouterImageModel, normalizeOpenRouterSettings } from './services/openRouterImages';
 import { ImageLightbox } from './components/ImageLightbox';
 
@@ -1166,12 +1172,12 @@ function AppContent() {
 
                       <ModelPicker options={generationModelOptions} value={settings.model} disabled={isGenerating || isUpscaling} openRouterEnabled={hasOpenRouter}
                         onChange={model => setSettings((s: any) => {
-                          const normalized = normalizeOpenRouterSettings(model, s.imageSize, s.aspectRatio);
+                          const openRouterSettings = normalizeOpenRouterSettings(model, s.imageSize, s.aspectRatio);
+                          const normalized = normalizeGeminiImageSettings(model, openRouterSettings.imageSize, openRouterSettings.aspectRatio);
                           return {
                             ...s,
                             model,
                             ...normalized,
-                            imageSize: MODELS_NO_512PX.has(model) && normalized.imageSize === "512px" ? "1K" : normalized.imageSize,
                           };
                         })}
                       />
@@ -1184,7 +1190,8 @@ function AppContent() {
                         <div className="flex flex-wrap gap-2">
                           {ASPECT_RATIOS.map(ratio => {
                             const openRouterModel = getOpenRouterModel(settings.model);
-                            const isDisabled = Boolean(openRouterModel && openRouterModel.aspectRatios.length > 0 && !(openRouterModel.aspectRatios as readonly string[]).includes(ratio));
+                            const isDisabled = !supportsGeminiAspectRatio(settings.model, ratio)
+                              || Boolean(openRouterModel && openRouterModel.aspectRatios.length > 0 && !(openRouterModel.aspectRatios as readonly string[]).includes(ratio));
                             return (
                             <button
                               key={ratio}
@@ -1206,7 +1213,7 @@ function AppContent() {
                             const openRouterModel = getOpenRouterModel(settings.model);
                             const isDisabled = settings.model === 'gpt-image-2'
                               || Boolean(openRouterModel && (openRouterModel.resolutions.length === 0 || !(openRouterModel.resolutions as readonly string[]).includes(res)))
-                              || MODELS_NO_512PX.has(settings.model) && res === "512px";
+                              || !supportsGeminiImageSize(settings.model, res);
                             return (
                               <button
                                 key={res}

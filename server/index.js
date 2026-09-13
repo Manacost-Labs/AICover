@@ -313,7 +313,11 @@ function cleanupOpenRouterJobs(now = Date.now()) {
 }
 
 function startOpenRouterJob(jobId, requestBody, apiKey) {
-  void requestOpenRouterImage(requestBody, apiKey)
+  void requestOpenRouterImage(requestBody, apiKey, {
+    onRetry: ({ attempt, nextAttempt, status, delayMs }) => {
+      console.warn(`[openrouter-job ${jobId}] model=${requestBody.model} retry_attempt=${nextAttempt} previous_attempt=${attempt} upstream_status=${status} delay_ms=${delayMs}`);
+    },
+  })
     .then((imageUrl) => {
       const job = openRouterJobs.get(jobId);
       if (!job) return;
@@ -327,9 +331,10 @@ function startOpenRouterJob(jobId, requestBody, apiKey) {
         error: error?.message || "Выбранная модель OpenRouter не смогла создать изображение",
         errorStatus: Number(error?.status) || 502,
         errorCode: typeof error?.code === 'string' ? error.code : 'PROVIDER_REJECTED',
+        errorAttempts: Number.isInteger(error?.attempts) ? error.attempts : 1,
         updatedAt: Date.now(),
       });
-      console.error(`[openrouter-job ${jobId}] model=${requestBody.model} code=${job.errorCode} status=${job.errorStatus}`);
+      console.error(`[openrouter-job ${jobId}] model=${requestBody.model} code=${job.errorCode} status=${job.errorStatus} attempts=${job.errorAttempts}`);
     });
 }
 
@@ -443,6 +448,7 @@ app.get("/api/thumbnail/openrouter-jobs/:jobId", asyncHandler(async (req, res) =
       status: "failed",
       error: job.error,
       code: job.errorCode || 'PROVIDER_REJECTED',
+      attempts: job.errorAttempts || 1,
     });
     return;
   }

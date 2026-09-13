@@ -2,6 +2,7 @@ import { buildThumbnailPrompt } from '../features/thumbnail/prompt';
 import type { ThumbnailAsset, ThumbnailGenerationSettings } from '../features/thumbnail/types';
 import { CHATGPT_IMAGE_MODEL, createChatGPTImageGenerator } from './chatgptImages';
 import { createGeminiClient } from './geminiClient';
+import { MODELS_SUPPORTING_IMAGE_SIZE, normalizeGeminiImageSettings } from '../constants';
 
 type InlineImage = { data: string; mimeType: string };
 
@@ -25,10 +26,6 @@ async function assetToInline(asset: ThumbnailAsset): Promise<InlineImage> {
     mimeType: blob.type || 'image/png',
     data: await blobToBase64(blob),
   };
-}
-
-function supportsImageSize(model: string): boolean {
-  return model.includes('3.1-flash-image') || model.includes('3-pro-image');
 }
 
 export async function generateHearthstoneThumbnailBackgrounds(
@@ -71,9 +68,10 @@ export async function generateHearthstoneThumbnailBackgrounds(
     });
     parts.push({ text: buildThumbnailPrompt(settings, index + 1) });
 
-    const imageConfig: Record<string, string> = { aspectRatio: '16:9' };
-    if (supportsImageSize(settings.model) && settings.model !== 'gemini-3.1-flash-lite-image') {
-      imageConfig.imageSize = settings.imageSize;
+    const normalizedSettings = normalizeGeminiImageSettings(settings.model, settings.imageSize, '16:9');
+    const imageConfig: Record<string, string> = { aspectRatio: normalizedSettings.aspectRatio };
+    if (MODELS_SUPPORTING_IMAGE_SIZE.has(settings.model)) {
+      imageConfig.imageSize = normalizedSettings.imageSize;
     }
 
     const response = await ai.models.generateContent({

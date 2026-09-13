@@ -24,7 +24,12 @@ import type {
   CardLibraryEntry,
   ReferenceLibraryEntry,
 } from "../../services/serverStorageService";
-import { MODELS_NO_512PX } from "../../constants";
+import {
+  getGeminiImageCapabilities,
+  normalizeGeminiImageSettings,
+  supportsGeminiAspectRatio,
+  supportsGeminiImageSize,
+} from "../../constants";
 import { Button } from "../ui/Controls";
 import { ReferencePicker } from "../ui/ReferencePicker";
 import { ProviderModelPicker as ModelPicker, ChatGptImageNotice, OpenRouterImageNotice, useOpenRouterModelAvailability } from "../ui/ChatGptConnection";
@@ -262,6 +267,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   const valid =
     createLayoutMode === "cover" ? sources.length >= 2 : filled === scenePlan;
   const openRouterModel = getOpenRouterModel(settings.model);
+  const geminiCapabilities = getGeminiImageCapabilities(settings.model);
   const requiredReferenceCount = sources.length + Number(Boolean(reference)) + Number(Boolean(baseImage));
   const automaticImageSize = settings.model === 'gpt-image-2'
     || Boolean(openRouterModel && openRouterModel.resolutions.length === 0);
@@ -706,12 +712,12 @@ export const CreateTab: React.FC<CreateTabProps> = ({
           <div className="studio-create__model">
             <ModelPicker options={generationModelOptions} value={settings.model} disabled={isGenerating || isUpscaling} openRouterEnabled={openRouterEnabled}
               onChange={model => setSettings((s: any) => {
-                const normalized = normalizeOpenRouterSettings(model, s.imageSize, s.aspectRatio);
+                const openRouterSettings = normalizeOpenRouterSettings(model, s.imageSize, s.aspectRatio);
+                const normalized = normalizeGeminiImageSettings(model, openRouterSettings.imageSize, openRouterSettings.aspectRatio);
                 return {
                   ...s,
                   model,
                   ...normalized,
-                  imageSize: MODELS_NO_512PX.has(model) && normalized.imageSize === "512px" ? "1K" : normalized.imageSize,
                 };
               })}
             />
@@ -731,7 +737,10 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                 }
               >
                 {ASPECT_RATIOS.map((ratio) => (
-                  <option key={ratio} value={ratio} disabled={Boolean(openRouterModel && openRouterModel.aspectRatios.length > 0 && !(openRouterModel.aspectRatios as readonly string[]).includes(ratio))}>
+                  <option key={ratio} value={ratio} disabled={
+                    !supportsGeminiAspectRatio(settings.model, ratio)
+                    || Boolean(openRouterModel && openRouterModel.aspectRatios.length > 0 && !(openRouterModel.aspectRatios as readonly string[]).includes(ratio))
+                  }>
                     {ratio}
                   </option>
                 ))}
@@ -755,7 +764,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                     key={resolution}
                     value={resolution}
                     disabled={
-                      resolution === "512px" && MODELS_NO_512PX.has(settings.model)
+                      !supportsGeminiImageSize(settings.model, resolution)
                       || Boolean(openRouterModel && openRouterModel.resolutions.length > 0 && !(openRouterModel.resolutions as readonly string[]).includes(resolution))
                     }
                   >
@@ -765,9 +774,9 @@ export const CreateTab: React.FC<CreateTabProps> = ({
               </select>
             </label>
           </div>
-          {MODELS_NO_512PX.has(settings.model) && (
+          {geminiCapabilities && geminiCapabilities.resolutions.length < RESOLUTIONS.length && (
             <p className="studio-create__helper">
-              Эта модель поддерживает разрешение от 1K.
+              Доступные размеры: {geminiCapabilities.resolutions.join(", ")}.
             </p>
           )}
           <label className="studio-create__field">

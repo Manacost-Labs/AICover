@@ -12,6 +12,9 @@ import {
 import {
   ASPECT_RATIOS,
   MODELS_SUPPORTING_IMAGE_SIZE,
+  normalizeGeminiImageSettings,
+  supportsGeminiAspectRatio,
+  supportsGeminiImageSize,
 } from "../../constants";
 import { Button } from "../ui/Controls";
 import { ModelPicker } from "../ui/ModelPicker";
@@ -267,7 +270,8 @@ export function ImageToolsTab({
                   {(["16:9", "1:1", "9:16"] as const).map((ratio) => (
                     <button
                       key={ratio}
-                      onClick={() => change("aspectRatio", ratio)}
+                      disabled={!supportsGeminiAspectRatio(settings.model, ratio)}
+                      onClick={() => supportsGeminiAspectRatio(settings.model, ratio) && change("aspectRatio", ratio)}
                       aria-pressed={settings.aspectRatio === ratio}
                     >
                       <span
@@ -290,7 +294,7 @@ export function ImageToolsTab({
                   }
                 >
                   {ASPECT_RATIOS.map((ratio) => (
-                    <option key={ratio} value={ratio}>
+                    <option key={ratio} value={ratio} disabled={!supportsGeminiAspectRatio(settings.model, ratio)}>
                       {ratio}
                     </option>
                   ))}
@@ -329,7 +333,7 @@ export function ImageToolsTab({
                   }
                 >
                   {["1K", "2K", "4K"].map((size) => (
-                    <option key={size}>{size}</option>
+                    <option key={size} disabled={!supportsGeminiImageSize(settings.model, size)}>{size}</option>
                   ))}
                 </select>
                 <p className="image-tools__hint">
@@ -341,7 +345,10 @@ export function ImageToolsTab({
           </section>
 
           <section aria-label="Модель обработки">
-            <ModelPicker options={imageToolModelOptions} value={settings.model} onChange={model => change("model", model)} />
+            <ModelPicker options={imageToolModelOptions} value={settings.model} onChange={model => {
+              const normalized = normalizeGeminiImageSettings(model, settings.imageSize, settings.aspectRatio);
+              tools.setSettings((previous) => ({ ...previous, model, ...normalized } as ToolSettings));
+            }} />
             {operation === "upscale" && !MODELS_SUPPORTING_IMAGE_SIZE.has(settings.model) && (
               <p className="image-tools__hint">Эта модель не поддерживает точный выбор разрешения. Для управления размером выберите 3.1 Flash или 3 Pro.</p>
             )}

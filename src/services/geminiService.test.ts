@@ -1,10 +1,27 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { generateFusedCover, likedUrlToInlineData, normalizeImageSource, type GenerationSettings } from './geminiService';
 import { composeOpenRouterReferenceSheet } from './openRouterReferenceComposer';
+import { normalizeGeminiImageSettings, supportsGeminiAspectRatio, supportsGeminiImageSize } from '../constants';
 
 vi.mock('./openRouterReferenceComposer', () => ({
   composeOpenRouterReferenceSheet: vi.fn(async () => ({ mimeType: 'image/webp', data: 'UklGRgAAAABXRUJQ' })),
 }));
+
+describe('Gemini image model contracts', () => {
+  it('normalizes sizes and aspect ratios to the documented stable model capabilities', () => {
+    expect(normalizeGeminiImageSettings('gemini-2.5-flash-image', '4K', '1:4')).toEqual({
+      imageSize: '1K',
+      aspectRatio: '16:9',
+    });
+    expect(normalizeGeminiImageSettings('gemini-3.1-flash-image', '512px', '1:8')).toEqual({
+      imageSize: '512px',
+      aspectRatio: '1:8',
+    });
+    expect(supportsGeminiImageSize('gemini-3-pro-image', '512px')).toBe(false);
+    expect(supportsGeminiAspectRatio('gemini-3-pro-image', '4:1')).toBe(false);
+    expect(supportsGeminiAspectRatio('gemini-3-pro-image', '21:9')).toBe(true);
+  });
+});
 
 describe('server-storage image sources', () => {
   afterEach(() => vi.unstubAllGlobals());

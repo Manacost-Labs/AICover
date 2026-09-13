@@ -65,7 +65,7 @@ it("shares the source and preserves per-operation parameters", async () => {
   expect(api.upscale).toHaveBeenCalledWith(
     source,
     "2K",
-    "gemini-3.1-flash-image-preview",
+    "gemini-3.1-flash-image",
   );
   expect(tools.source).toEqual(source);
   await act(async () => tools.setOperation("expand"));
@@ -74,7 +74,7 @@ it("shares the source and preserves per-operation parameters", async () => {
     source,
     "9:16",
     "Soft background",
-    "gemini-3.1-flash-image-preview",
+    "gemini-3.1-flash-image",
   );
   expect(tools.results.map((r) => r.operation)).toEqual(["expand", "upscale"]);
 });
@@ -121,7 +121,7 @@ it("retries the failed item with its original input, model and parameters", asyn
     tools.setOperation("upscale");
     tools.setSettings((s) => ({
       ...s,
-      model: "gemini-3-pro-image-preview",
+      model: "gemini-3-pro-image",
       aspectRatio: "1:1",
     }));
   });

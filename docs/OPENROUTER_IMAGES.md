@@ -1,98 +1,89 @@
-# OpenRouter image provider foundation
+# OpenRouter image provider contract
 
-Status: implementation candidate only. It is not activated in the Cover UI and
-has not been deployed. No paid OpenRouter request was made during validation.
+Status: active server-side integration. Capability snapshot rechecked against
+the official per-model endpoint API on 2026-09-13.
 
-## Provider contract
+## Request path and ownership
 
-- Server-owned credential: `OPENROUTER_API_KEY`; it is never returned by an API
-  response or included in the browser bundle.
-- Strict server allowlist: the browser may select only a verified model ID; it
-  cannot send an arbitrary provider slug or provider-specific options.
-- Fail-closed activation: both `OPENROUTER_API_KEY` and
-  `OPENROUTER_ENABLED=true` are required. Key presence alone does not activate
-  the UI or the paid endpoint.
-- Upstream endpoint: `POST https://openrouter.ai/api/v1/images`.
-- Browser contract:
-  - `POST /api/thumbnail/openrouter-generate` starts one job and is never retried
-    automatically;
-  - `GET /api/thumbnail/openrouter-jobs/:jobId` polls the same job;
-  - `DELETE /api/thumbnail/openrouter-jobs/:jobId` acknowledges a received
-    result and releases it;
-  - `/api/runtime-capabilities` exposes only `openrouter: boolean`.
-- Official attribution headers are `HTTP-Referer` and `X-OpenRouter-Title`.
+- The credential is server-owned (`OPENROUTER_API_KEY`) and never enters the
+  browser bundle or a public API response.
+- `OPENROUTER_ENABLED=true` and a non-empty key are both required.
+- The server sends `POST https://openrouter.ai/api/v1/images` and forwards only
+  allowlisted fields supported by the selected model.
+- The browser starts a same-origin job, polls that exact job, persists the paid
+  result before acknowledgement, then deletes the completed job.
+- There is no hidden model substitution. An unavailable selected model fails
+  explicitly so the user knows which provider needs attention.
 
-OpenRouter references:
+Official sources:
 
 - <https://openrouter.ai/docs/guides/overview/multimodal/image-generation>
-- <https://openrouter.ai/api/v1/images/models>
+- <https://openrouter.ai/docs/guides/routing/provider-selection>
+- `GET https://openrouter.ai/api/v1/images/models/:author/:slug/endpoints`
 
-## Verified model catalog
+## Model matrix
 
-Snapshot checked against the official Image Models API on 2026-09-12. Every
-request is reduced to parameters declared for that specific model.
+The server profile is deliberately a subset of each live endpoint contract.
+The UI may show a smaller common ratio list, while the server remains the final
+trust boundary.
 
-| Model ID | References | Resolution | Cover composer |
-| --- | ---: | --- | --- |
-| `openai/gpt-image-2` | 0–16 | provider default | ready |
-| `meta/muse-image` | not declared | provider default | visible, disabled |
-| `recraft/recraft-v4-styles-pro` | 1–10 | provider default | ready |
-| `bytedance-seed/seedream-5-0-lite` | 0–14 | 2K, 4K | ready |
-| `bytedance-seed/seedream-5-0-pro` | 0–14 | 1K, 2K | ready |
-| `x-ai/grok-imagine-image-2.0` | 0–3 | 1K, 2K | ready |
-| `qwen/qwen-image-3-pro` | 0–4 | 1K, 2K | ready |
-| `krea/krea-2-large` | 0–1 | 1K | visible, disabled |
-| `sourceful/riverflow-v2.5-pro` | 0–10 | 1K, 2K, 4K | ready |
-| `sourceful/riverflow-v2.5-fast` | 0–4 | 1K, 2K | ready |
+| Model ID | References | Resolution | Reference delivery | State |
+| --- | ---: | --- | --- | --- |
+| `openai/gpt-image-2` | 0–16 | automatic | individual | ready |
+| `meta/muse-image` | — | — | contact sheet when available | disabled: no endpoint |
+| `recraft/recraft-v4-styles-pro` | 1–10 | automatic | individual | ready |
+| `bytedance-seed/seedream-5-0-lite` | 0–14 | 2K, 4K | individual | ready |
+| `bytedance-seed/seedream-5-0-pro` | 0–14 | 1K, 2K | individual | ready |
+| `x-ai/grok-imagine-image-2.0` | 0–3 | 1K, 2K | individual | ready |
+| `qwen/qwen-image-3-pro` | 0–4 | 1K, 2K | individual | ready |
+| `krea/krea-2-large` | 0–1 | 1K | labeled contact sheet | ready |
+| `sourceful/riverflow-v2.5-pro` | 0–10 | 1K, 2K, 4K | labeled contact sheet | ready |
+| `sourceful/riverflow-v2.5-fast` | 0–4 | 1K, 2K | labeled contact sheet | ready |
 
-Muse is disabled because the catalog does not declare `input_references`.
-Krea is disabled because the current Cover composer requires at least two
-source images while that endpoint declares one reference at most. This is a UX
-compatibility boundary, not a claim that either model is unavailable upstream.
+Krea and Riverflow receive a bounded labeled contact sheet. It preserves every
+required source as a separate uncropped panel while staying inside an endpoint
+that accepts fewer individual references. Muse remains visible but disabled;
+its public endpoint list is empty and Cover must not pretend it is runnable.
 
-## Implemented security boundaries
+## Reliability and safety
 
-- inline PNG/JPEG/WebP references with model-specific ceilings from the
-  official catalog (up to 16), while
-  the existing 10 MiB-per-image and 24 MiB-total limits remain global;
-- strict canonical base64 and MIME magic-byte validation;
-- 10 MiB per decoded image and 24 MiB decoded total;
-- a route-specific 34 MiB JSON ceiling applied before the legacy parser;
-- at most two request bodies admitted through parsing and response completion
-  at once, after the rate-limit check;
-- 16 MiB decoded output ceiling and a 23 MiB streamed upstream-response ceiling;
-- at most four in-memory jobs; paid results remain pollable until client
-  acknowledgement or the 15-minute TTL;
-- job polling is bound to the request IP in addition to an unguessable UUID;
-- provider errors and response bodies are not exposed to the browser;
-- the billable start request is not automatically retried.
+- Input PNG/JPEG/WebP is canonical-base64 and magic-byte validated.
+- Limits: 10 MiB per source, 24 MiB combined by default, 3 MiB composed input
+  for Riverflow, 16 MiB decoded output, 23 MiB streamed upstream envelope.
+- Catalog and generation responses are read incrementally with hard byte caps.
+- Up to two request bodies and four in-memory jobs are admitted concurrently.
+- Completed jobs remain recoverable until acknowledgement or the 15-minute TTL.
+- Job ownership is bound to the request identity available to this service.
+- Browser messages contain stable public error codes, never provider bodies,
+  credentials, prompts, or reference data.
 
-## Activation hold
+One paid request gets at most two upstream attempts. A retry happens only after
+an explicit `429`, `502`, `503`, `524`, or `529`; `Retry-After` is honored and
+the delay is capped at five seconds. Timeouts, aborted requests, `400`, `401`,
+`402`, `403`, `404`, `413`, `422`, `500`, `504`, invalid successful payloads,
+and decoded-result failures are not retried. This avoids duplicate paid work
+when completion is ambiguous.
 
-The existing edge SSO protects the application, but the Node service does not
-yet receive a stable authenticated user identifier. IP binding is a secondary
-boundary, not a billing identity: users behind one NAT can share an IP and
-addresses can change.
+OpenRouter may still have a provider incident after a successful preflight.
+Retry reduces short transient failures; it cannot guarantee third-party uptime.
 
-Before enabling the OpenRouter model in the UI, choose and implement one of:
+## Drift verification
 
-1. a trusted HearthPulse user identity forwarded to the service, with per-user
-   quotas and audit records; or
-2. user-owned OpenRouter credentials (BYOK), encrypted at rest with an explicit
-   revoke flow.
+Run the credential-free contract check while the local Cover service is active:
 
-The current server-owned-key path must not be presented as “each user connects
-their own ChatGPT”. ChatGPT OAuth and OpenRouter are separate providers and
-separate billing boundaries.
+```bash
+node scripts/verify-provider-contracts.mjs
+```
 
-## Verification
+The command fails if a selectable OpenRouter model loses its endpoint or an
+allowlisted capability, a stable Gemini model stops advertising
+`generateContent`, or the installed ChatGPT OAuth adapter changes unexpectedly.
+It deliberately fails for a newly appeared Muse endpoint so that enabling it
+requires a reviewed contract change.
 
-- `node --test server/openrouter-image.test.js`
-- `npx vitest run src/services/openRouterImages.test.ts`
-- `npm run lint`
-- `npm test`
-- `npm run build`
+Focused checks:
 
-Production activation additionally requires a fresh CRITICAL security review,
-a cost-bounded canary, and a tested rollback. A model appearing in the catalog
-does not by itself prove reference editing or transparent-background quality.
+```bash
+node --test server/openrouter-image.test.js server/openrouter-models.test.js scripts/verify-provider-contracts.test.mjs
+npx vitest run src/services/openRouterImages.test.ts src/services/geminiService.test.ts
+```

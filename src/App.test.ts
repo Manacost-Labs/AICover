@@ -243,10 +243,10 @@ describe('redesign shell and generation boundaries', () => {
     await act(async () => state.create.setSettings((s: any) => ({ ...s, imageSize: '512px' })));
     await act(async () => state.create.onOpenSettings());
     await click('⚙️ Настройки');
-    await act(async () => container.querySelector<HTMLInputElement>('.studio-settings-dialog .model-picker input[value="gemini-3-pro-image-preview"]')!.click());
-    expect(state.create.settings.model).toBe('gemini-3-pro-image-preview');
+    await act(async () => container.querySelector<HTMLInputElement>('.studio-settings-dialog .model-picker input[value="gemini-3-pro-image"]')!.click());
+    expect(state.create.settings.model).toBe('gemini-3-pro-image');
     expect(state.create.settings.imageSize).toBe('1K');
     await click('Готово');
-    expect(state.create.settings.model).toBe('gemini-3-pro-image-preview');
+    expect(state.create.settings.model).toBe('gemini-3-pro-image');
   });
 });

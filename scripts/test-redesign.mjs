@@ -282,7 +282,7 @@ try {
   }
   await capture({ path: path.join(output, 'image-tools-mobile-light.png'), fullPage: true });
   checks.push('Unified tools: validates uploads; shared source/settings survive mode and tab changes; expand → upscale chaining; original/result comparison; real download event; save failure keeps result; 7 responsive widths');
-  assert.equal(modelRequests.slice(-2).every(url => url.includes('gemini-3-pro-image-preview')), true);
+  assert.equal(modelRequests.slice(-2).every(url => url.includes('gemini-3-pro-image')), true);
   checks.push('Model logo picker in all four active locations; native arrow navigation; shared modal/Create state; Pro 512px→1K and Thumbnail Lite1K safeguards; loaded local logos; model ID reaches fixture requests');
 
   collectionFixtures = true;

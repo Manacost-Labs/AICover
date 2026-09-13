@@ -200,6 +200,7 @@ function userMessageForFailure(status: number, code?: string) {
   if (code === 'REFERENCE_PAYLOAD_TOO_LARGE') return 'Референсы превышают лимит провайдера. Cover уже сжал их; уберите один источник или загрузите файл меньшего размера.';
   if (code === 'UNSUPPORTED_PARAMETERS') return 'Модель не принимает выбранные параметры. Проверьте формат и разрешение.';
   if (code === 'RATE_LIMITED') return 'OpenRouter ограничил частоту запросов. Попробуйте через несколько минут.';
+  if (code === 'PROVIDER_RETRY_EXHAUSTED') return 'Провайдер модели не ответил после автоматической повторной попытки. Повторите позже или выберите другую модель.';
   if (code === 'PROVIDER_UNAVAILABLE') return 'Провайдер выбранной модели временно недоступен. Выберите другую модель или повторите позже.';
   if (code === 'PROVIDER_TIMEOUT') return 'OpenRouter не ответил вовремя. Запрос не повторялся автоматически.';
   if (status === 413) return 'Исходные изображения слишком большие для OpenRouter.';
