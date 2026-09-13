@@ -4,9 +4,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import { inventory } from './release-openrouter.mjs';
-import { buildReviewedCandidate, publish, rollback } from './release-performance.mjs';
+import { assertReleaseDriverPath, buildReviewedCandidate, publish, rollback } from './release-performance.mjs';
 
 const TEST_COMMIT = 'b'.repeat(40);
 process.env.COVER_RELEASE_COMMIT = TEST_COMMIT;
@@ -26,7 +27,7 @@ async function fixture() {
   await put(`${previous}/index.html`, 'previous-index');
   await put(`${previous}/assets/old.js`, 'old-asset');
   await put(`${candidate}/index.html`, 'candidate-index');
-  await put(`${candidate}/assets/new.js`, 'new-asset');
+  await put(`${candidate}/assets/geminiService-NewHash1.js`, 'export const generationReady = true;');
   await fs.cp(previous, `${app}/dist`, { recursive: true });
   await put(`${app}/server/index.js`, 'previous-server');
   await put(`${saved}/previous/index`, 'previous-index');
@@ -87,6 +88,16 @@ test('builds only the exact reviewed clean commit', async () => {
   ]);
 });
 
+test('post-capture commands reject a mutable checkout driver', () => {
+  const backup = '/tmp/frozen-cover-release';
+  assert.doesNotThrow(() => assertReleaseDriverPath('capture', '/mutable/release-performance.mjs', backup));
+  assert.doesNotThrow(() => assertReleaseDriverPath('deploy', `${backup}/support/scripts/release-performance.mjs`, backup));
+  assert.throws(
+    () => assertReleaseDriverPath('rollback', '/mutable/release-performance.mjs', backup),
+    /verified backup driver/,
+  );
+});
+
 test('publishes backend before index and rollback restores the exact release', async () => {
   const release = await fixture();
   const events = [];
@@ -101,7 +112,8 @@ test('publishes backend before index and rollback restores the exact release', a
   assert.equal(await fs.readFile(release.targets.index, 'utf8'), 'previous-index');
   assert.equal(await fs.readFile(release.targets.server, 'utf8'), 'previous-server');
   await assert.rejects(fs.lstat(release.targets.cache), (error) => error.code === 'ENOENT');
-  assert.deepEqual(await inventory(`${release.app}/dist`), release.manifest.previousDist);
+  const retainedModule = await import(pathToFileURL(`${release.app}/dist/assets/geminiService-NewHash1.js`).href);
+  assert.equal(retainedModule.generationReady, true, 'an already-open candidate tab must complete its deferred import');
 });
 
 test('a backend activation failure automatically restores assets and server files', async () => {
@@ -114,5 +126,5 @@ test('a backend activation failure automatically restores assets and server file
   }), /previous release restored/);
   assert.equal(await fs.readFile(release.targets.server, 'utf8'), 'previous-server');
   await assert.rejects(fs.lstat(release.targets.cache), (error) => error.code === 'ENOENT');
-  assert.deepEqual(await inventory(`${release.app}/dist`), release.manifest.previousDist);
+  assert.equal(await fs.readFile(`${release.app}/dist/assets/geminiService-NewHash1.js`, 'utf8'), 'export const generationReady = true;');
 });

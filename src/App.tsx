@@ -40,6 +40,10 @@ import {
   sceneRolesOrder,
 } from './services/generationContracts';
 import {
+  loadGenerationService,
+  loadGenerationServiceForRun,
+} from './services/generationServiceLoader';
+import {
   loadCardLibrary, saveCardToLibrary, deleteCardFromLibrary,
   loadReferenceLibrary, saveReferenceToLibrary, deleteReferenceFromLibrary, updateReferenceVisionAnalysis, fetchUrlAsImageSource,
   loadHistory, saveToHistory,
@@ -76,15 +80,6 @@ const ReferencesTab = React.lazy(() =>
   import('./components/tabs/ReferencesTab').then((m) => ({ default: m.ReferencesTab }))
 );
 
-let generationService: Promise<typeof import('./services/geminiService')> | null = null;
-
-function loadGenerationService() {
-  generationService ??= import('./services/geminiService').catch((error) => {
-    generationService = null;
-    throw error;
-  });
-  return generationService;
-}
 const ThumbnailTab = React.lazy(() =>
   import('./components/tabs/ThumbnailTab').then((m) => ({ default: m.ThumbnailTab }))
 );
@@ -704,7 +699,8 @@ function AppContent() {
     setIsGenerating(true);
     generationActive.current = true;
     const runId = ++generationRunId.current;
-    generationAbort.current = new AbortController();
+    const controller = new AbortController();
+    generationAbort.current = controller;
     setSaveWarning(null);
     setGenerationNotice(null);
     setGenerationProgress({
@@ -738,11 +734,16 @@ function AppContent() {
         }
       : undefined;
     try {
-      const { generateFusedCover } = await loadGenerationService();
+      const service = await loadGenerationServiceForRun(
+        controller.signal,
+        () => generationRunId.current === runId,
+      );
+      if (!service) return;
+      const { generateFusedCover } = service;
       const images = await generateFusedCover(
         ordered, reference, settings, baseImage, likedImages, referenceVisionNotes,
         (p) => { if (generationRunId.current === runId) setGenerationProgress(p); },
-        generationAbort.current.signal,
+        controller.signal,
         publishOpenRouterResult,
       );
 

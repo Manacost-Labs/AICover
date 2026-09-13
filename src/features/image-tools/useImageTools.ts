@@ -3,6 +3,7 @@ import type {
   GenerationSettings,
   ImageSource,
 } from "../../services/generationContracts";
+import { loadGenerationService } from "../../services/generationServiceLoader";
 
 export type ImageToolOperation = "expand" | "upscale";
 export interface ToolSource extends ImageSource {
@@ -68,7 +69,7 @@ export function useImageTools(options: {
         items.map((row) => (row.id === item.id ? { ...row, ...patch } : row)),
       );
     try {
-      const { expandImage, upscaleImage } = await import("../../services/geminiService");
+      const { expandImage, upscaleImage } = await loadGenerationService();
       const output =
         item.operation === "upscale"
           ? await upscaleImage(

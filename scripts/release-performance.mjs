@@ -15,6 +15,7 @@ export const BACKUP = '/var/backups/cover-image/20260913-zul17-performance';
 const LOCK = '/run/lock/cover-foundation-release.lock';
 const SERVICE = 'cover-image.service';
 const SESSION_FILE = '/var/lib/cover-image/chatgpt/sessions.enc';
+const SESSION_DIR = '/var/lib/cover-image/chatgpt';
 const REVIEWED_COMMIT_ENV = 'COVER_RELEASE_COMMIT';
 const BUILD_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
@@ -151,11 +152,14 @@ export async function capture() {
     'package.json',
     'docs/PERFORMANCE_RELEASE_V2.md',
     'scripts/measure-performance.mjs',
+    'scripts/release-openrouter.mjs',
     'scripts/release-performance.mjs',
     'scripts/release-performance.test.mjs',
     'server/staticAssetCache.js',
     'server/staticAssetCache.test.js',
     'src/services/generationContracts.ts',
+    'src/services/generationServiceLoader.ts',
+    'src/services/generationServiceLoader.test.ts',
     'src/services/geminiService.ts',
     'src/App.tsx',
     'src/components/tabs/CreateTab.tsx',
@@ -179,7 +183,7 @@ export async function capture() {
     support: await inventory(`${BACKUP}/support`),
     baselinePid: Number(execFileSync('systemctl', ['show', SERVICE, '-p', 'MainPID', '--value'], { encoding: 'utf8' }).trim()),
     baselineRestarts: Number(execFileSync('systemctl', ['show', SERVICE, '-p', 'NRestarts', '--value'], { encoding: 'utf8' }).trim()),
-    sessionHash: await hash(SESSION_FILE),
+    sessionStore: await sessionStoreState(),
     staticGuards: STATIC_GUARDS,
   };
   assert.deepEqual(manifest.previousDist, await inventory(`${APP}/dist`));
@@ -238,8 +242,19 @@ async function restorePreviousAssets(saved, app, manifest) {
       }
     } else if (activeHash !== null) {
       assert.equal(activeHash, candidateHash, `New asset rollback drift: ${relative}`);
-      await fs.unlink(target);
+      // Keep fingerprinted candidate assets for tabs that loaded the candidate
+      // index before rollback and may request a deferred chunk afterward.
     }
+  }
+}
+
+async function assertPreviousReleaseAvailable(app, manifest) {
+  for (const [relative, previousHash] of Object.entries(manifest.previousDist)) {
+    assert.equal(await hash(`${app}/dist/${relative}`), previousHash, `Previous release asset was not restored: ${relative}`);
+  }
+  for (const [relative, candidateHash] of Object.entries(manifest.candidateDist)) {
+    if (manifest.previousDist[relative] !== undefined) continue;
+    assert.equal(await hash(`${app}/dist/${relative}`), candidateHash, `Candidate-only deferred asset was not retained: ${relative}`);
   }
 }
 
@@ -260,10 +275,10 @@ export async function rollback({ saved = BACKUP, app = APP, targets = liveTarget
   await restoreFile(targets.server, manifest.files.server, `${saved}/previous/server`);
   await restoreFile(targets.cache, manifest.files.cache, `${saved}/previous/cache`);
   await restorePreviousAssets(saved, app, manifest);
-  assert.deepEqual(await inventory(`${app}/dist`), manifest.previousDist, 'Previous dist was not fully restored');
+  await assertPreviousReleaseAvailable(app, manifest);
   await hooks('restore');
   if (targets.server === liveTargets.server) {
-    assert.equal(await hash(SESSION_FILE), manifest.sessionHash, 'ChatGPT session store changed during rollback');
+    await validateSessionStore(manifest.sessionStore);
     assert.equal(execFileSync('systemctl', ['is-active', SERVICE], { encoding: 'utf8' }).trim(), 'active');
   }
   return { rolledBack: true, restoredIndex: manifest.files.index.previous };
@@ -341,7 +356,6 @@ async function verifyPublicGate(fetchImpl = globalThis.fetch) {
   assert.equal(response.headers.get('location'), 'https://hearthpulse.net/api/auth/cover/start');
 }
 
-let activationSessionHash;
 export async function verifyLive(saved = BACKUP) {
   const manifest = await validateArchive(saved);
   await assertStaticGuards();
@@ -356,7 +370,7 @@ export async function verifyLive(saved = BACKUP) {
   const currentPid = Number(execFileSync('systemctl', ['show', SERVICE, '-p', 'MainPID', '--value'], { encoding: 'utf8' }).trim());
   assert.notEqual(currentPid, 0, 'Service has no active PID');
   assert.notEqual(currentPid, manifest.baselinePid, 'Backend release did not restart the service');
-  assert.equal(await hash(SESSION_FILE), activationSessionHash ?? manifest.sessionHash, 'ChatGPT session store changed during activation');
+  await validateSessionStore(manifest.sessionStore);
   await checkLocal(manifest.files.index.candidate, manifest);
   await verifyPublicGate();
   return { verified: true, sourceCommit: manifest.sourceCommit, immutableAssets: true, sessionPersistence: true };
@@ -370,7 +384,6 @@ function command(binary, args) {
 export const liveHooks = async (stage) => {
   const manifest = await validateArchive();
   if (stage === 'backend') {
-    activationSessionHash = await hash(SESSION_FILE);
     command('systemctl', ['restart', SERVICE]);
     await checkLocal(null, manifest);
   }
@@ -385,6 +398,29 @@ export const liveHooks = async (stage) => {
   }
   if (stage === 'verify') await verifyLive();
 };
+
+async function sessionStoreState() {
+  const directory = await fs.stat(SESSION_DIR);
+  const file = await fs.stat(SESSION_FILE);
+  return {
+    directoryMode: directory.mode & 0o777,
+    fileMode: file.mode & 0o777,
+  };
+}
+
+async function validateSessionStore(expected) {
+  const current = await sessionStoreState();
+  assert.deepEqual(current, expected, 'ChatGPT session store permissions changed');
+}
+
+export function assertReleaseDriverPath(mode, executable, backup = BACKUP) {
+  if (mode === 'capture') return;
+  assert.equal(
+    path.resolve(executable),
+    path.resolve(`${backup}/support/scripts/release-performance.mjs`),
+    'Post-capture release commands must run from the verified backup driver',
+  );
+}
 
 export async function rehearse(saved = BACKUP) {
   const manifest = await validateArchive(saved);
@@ -411,6 +447,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const mode = process.argv[2];
   assert(['capture', 'rehearse', 'deploy', 'verify', 'rollback'].includes(mode), `Usage: ${REVIEWED_COMMIT_ENV}=<reviewed-sha> release-performance.mjs capture|rehearse|deploy|verify|rollback`);
   expectedReviewedCommit();
+  assertReleaseDriverPath(mode, fileURLToPath(import.meta.url));
   assert.equal(process.getuid(), 0, 'Release commands require root');
   if (process.env.COVER_RELEASE_LOCK_HELD !== '1') {
     execFileSync('flock', ['-n', LOCK, 'env', 'COVER_RELEASE_LOCK_HELD=1', process.execPath, fileURLToPath(import.meta.url), mode], { stdio: 'inherit' });

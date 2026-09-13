@@ -10,7 +10,7 @@ The production Express origin also returned `Cache-Control: no-cache, no-store, 
 
 - Move the generation implementation behind a cached dynamic import. Types, prompts and scene-role contracts live in a lightweight module, so the AI pipeline is fetched only on the first AI action.
 - Group all React and Motion package subpaths into stable vendor chunks. This prevents application edits from invalidating framework payloads.
-- Serve content-hashed `/assets/*` with `public, max-age=31536000, immutable` and `X-Content-Type-Options: nosniff`. HTML remains `no-cache/no-store`, so each navigation receives the current asset map.
+- Serve fingerprinted `/assets/*` with `public, max-age=31536000, immutable` and `X-Content-Type-Options: nosniff`. Unfingerprinted assets keep a five-minute revalidation policy. HTML remains `no-cache/no-store`, so each navigation receives the current asset map.
 - Preserve database, authentication, session, media storage and provider contracts.
 
 ## Before and after
@@ -19,8 +19,8 @@ Synthetic Chromium, 1440×1000, three isolated runs, 240 fixture images, no netw
 
 | Metric | Before | Candidate | Delta |
 | --- | ---: | ---: | ---: |
-| Initial JavaScript raw | 507,768 B | 464,214 B | -43,554 B (-8.6%) |
-| Initial JavaScript gzip | 165,939 B | 149,679 B | -16,260 B (-9.8%) |
+| Initial JavaScript raw | 507,768 B | 464,181 B | -43,587 B (-8.6%) |
+| Initial JavaScript gzip | 165,939 B | 149,708 B | -16,231 B (-9.8%) |
 | Generation SDK in initial load | no | no | unchanged |
 
 Local timings are diagnostic only; the isolated run has no real network latency or RUM. The durable user-facing improvement is the smaller initial payload plus immutable reuse of unchanged content-hashed chunks.
@@ -31,15 +31,15 @@ All commands require the exact reviewed commit:
 
 ```bash
 sudo COVER_RELEASE_COMMIT=<sha> node scripts/release-performance.mjs capture
-sudo COVER_RELEASE_COMMIT=<sha> node scripts/release-performance.mjs rehearse
-sudo COVER_RELEASE_COMMIT=<sha> node scripts/release-performance.mjs deploy
-sudo COVER_RELEASE_COMMIT=<sha> node scripts/release-performance.mjs verify
+sudo COVER_RELEASE_COMMIT=<sha> node /var/backups/cover-image/20260913-zul17-performance/support/scripts/release-performance.mjs rehearse
+sudo COVER_RELEASE_COMMIT=<sha> node /var/backups/cover-image/20260913-zul17-performance/support/scripts/release-performance.mjs deploy
+sudo COVER_RELEASE_COMMIT=<sha> node /var/backups/cover-image/20260913-zul17-performance/support/scripts/release-performance.mjs verify
 ```
 
 Rollback:
 
 ```bash
-sudo COVER_RELEASE_COMMIT=<sha> node scripts/release-performance.mjs rollback
+sudo COVER_RELEASE_COMMIT=<sha> node /var/backups/cover-image/20260913-zul17-performance/support/scripts/release-performance.mjs rollback
 ```
 
-The release holds the shared Cover release lock, checks production guards, builds only a clean exact SHA, archives the previous and candidate dist/server files, rehearses publish plus rollback away from production, writes backend files before restart, activates the index last, and verifies health, cache headers, authentication redirect and ChatGPT session persistence.
+The capture archives the complete release driver and its imported helper. Every post-capture command must run from that verified archive. The release holds the shared Cover release lock, checks production guards, builds only a clean exact SHA, rehearses publish plus rollback away from production, writes backend files before restart, activates the index last, and verifies health, cache headers, authentication redirect and a decryptable session store with protected permissions. Rollback retains candidate-only fingerprinted chunks so tabs opened before rollback can still complete a deferred import.
