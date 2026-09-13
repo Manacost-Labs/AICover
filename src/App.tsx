@@ -28,19 +28,17 @@ import { ProviderModelPicker as ModelPicker, ChatGptImageNotice, OpenRouterImage
 import { generationModelOptions } from './features/models/options';
 import { useImageTools } from './features/image-tools/useImageTools';
 import { get, set } from 'idb-keyval';
-import {
-  generateFusedCover,
-  type CoverGenerationProgress,
+import type {
+  CoverGenerationProgress,
   ImageSource,
   GenerationSettings,
+  SceneRole,
+} from './services/generationContracts';
+import {
   DEFAULT_SYSTEM_PROMPT_CREATE,
   DEFAULT_SYSTEM_PROMPT_EDIT,
-  upscaleImage,
-  analyzeReferenceCompositionVision,
-  analyzeFavoriteChoiceVision,
   sceneRolesOrder,
-  type SceneRole,
-} from './services/geminiService';
+} from './services/generationContracts';
 import {
   loadCardLibrary, saveCardToLibrary, deleteCardFromLibrary,
   loadReferenceLibrary, saveReferenceToLibrary, deleteReferenceFromLibrary, updateReferenceVisionAnalysis, fetchUrlAsImageSource,
@@ -77,6 +75,16 @@ const FavoritesTab = React.lazy(() =>
 const ReferencesTab = React.lazy(() =>
   import('./components/tabs/ReferencesTab').then((m) => ({ default: m.ReferencesTab }))
 );
+
+let generationService: Promise<typeof import('./services/geminiService')> | null = null;
+
+function loadGenerationService() {
+  generationService ??= import('./services/geminiService').catch((error) => {
+    generationService = null;
+    throw error;
+  });
+  return generationService;
+}
 const ThumbnailTab = React.lazy(() =>
   import('./components/tabs/ThumbnailTab').then((m) => ({ default: m.ThumbnailTab }))
 );
@@ -651,6 +659,7 @@ function AppContent() {
     const requestSettings = { ...imageTools.settings };
     const input = { data: url, mimeType: /^data:([^;]+);/.exec(url)?.[1] ?? 'image/png' };
     try {
+      const { upscaleImage } = await loadGenerationService();
       const upscaledUrl = await upscaleImage(input, requestSettings.imageSize, requestSettings.model);
       imageTools.addExternalResult({ id: existingId ?? crypto.randomUUID(), source: input, operation: 'upscale', settings: requestSettings, output: upscaledUrl, status: 'done' });
       if (activeTab === 'create') setResults(prev => [upscaledUrl, ...prev]);
@@ -729,6 +738,7 @@ function AppContent() {
         }
       : undefined;
     try {
+      const { generateFusedCover } = await loadGenerationService();
       const images = await generateFusedCover(
         ordered, reference, settings, baseImage, likedImages, referenceVisionNotes,
         (p) => { if (generationRunId.current === runId) setGenerationProgress(p); },
@@ -797,6 +807,7 @@ function AppContent() {
       for (const u of siblings.slice(0, 3)) {
         alternatives.push(await imageUrlToImageSource(u));
       }
+      const { analyzeFavoriteChoiceVision } = await loadGenerationService();
       const text = await analyzeFavoriteChoiceVision(chosen, alternatives, {
         userPromptHint: settingsRef.current.prompt,
       });
@@ -874,6 +885,7 @@ function AppContent() {
       const entry = await saveReferenceToLibrary(name, imageData, mimeType);
       setReferenceLibrary((prev) => [entry, ...prev]);
       try {
+        const { analyzeReferenceCompositionVision } = await loadGenerationService();
         const analysis = await analyzeReferenceCompositionVision({ data: imageData, mimeType });
         await updateReferenceVisionAnalysis(entry.id, analysis);
         setReferenceLibrary((prev) =>
@@ -891,6 +903,7 @@ function AppContent() {
     setReanalyzingReferenceId(entry.id);
     try {
       const { data, mimeType } = await fetchUrlAsImageSource(entry.storageUrl);
+      const { analyzeReferenceCompositionVision } = await loadGenerationService();
       const analysis = await analyzeReferenceCompositionVision({ data, mimeType });
       await updateReferenceVisionAnalysis(entry.id, analysis);
       setReferenceLibrary((prev) =>

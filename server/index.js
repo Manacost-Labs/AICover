@@ -17,6 +17,7 @@ import {
 import { createOpenRouterModelAvailability } from './openrouter-models.js';
 import { createChatGptRouter } from "./chatgpt-router.js";
 import { createEncryptedChatGptSessionStore } from "./chatgpt-session-store.js";
+import { staticAssetCacheOptions } from "./staticAssetCache.js";
 
 dotenv.config({ path: process.env.COVER_IMAGE_ENV || "/etc/cover-image/cover-image.env" });
 
@@ -641,13 +642,7 @@ app.use(publicUploadPrefix, (_req, res) => {
   res.status(404).type("text/plain").send("Upload not found");
 });
 
-app.use("/assets", express.static(path.join(distDir, "assets"), {
-  maxAge: "0",
-  etag: false,
-  setHeaders(res) {
-    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  },
-}));
+app.use("/assets", express.static(path.join(distDir, "assets"), staticAssetCacheOptions));
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Not found" });
 });

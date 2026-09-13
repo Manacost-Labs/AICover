@@ -1,9 +1,8 @@
 import { useRef, useState } from "react";
-import {
-  expandImage,
-  upscaleImage,
-  type ImageSource,
-} from "../../services/geminiService";
+import type {
+  GenerationSettings,
+  ImageSource,
+} from "../../services/generationContracts";
 
 export type ImageToolOperation = "expand" | "upscale";
 export interface ToolSource extends ImageSource {
@@ -12,7 +11,7 @@ export interface ToolSource extends ImageSource {
 export interface ToolSettings {
   model: string;
   imageSize: "1K" | "2K" | "4K";
-  aspectRatio: Parameters<typeof expandImage>[1];
+  aspectRatio: GenerationSettings["aspectRatio"];
   prompt: string;
 }
 export interface ToolResult {
@@ -69,6 +68,7 @@ export function useImageTools(options: {
         items.map((row) => (row.id === item.id ? { ...row, ...patch } : row)),
       );
     try {
+      const { expandImage, upscaleImage } = await import("../../services/geminiService");
       const output =
         item.operation === "upscale"
           ? await upscaleImage(

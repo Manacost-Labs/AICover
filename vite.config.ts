@@ -30,12 +30,25 @@ export default defineConfig(({mode}) => {
     build: {
       rollupOptions: {
         output: {
-          manualChunks: {
-            'vendor-react': ['react', 'react-dom'],
-            'vendor-motion': ['motion'],
-            'vendor-genai': ['@google/genai'],
-            'vendor-ui': ['lucide-react', 'idb-keyval'],
-            'vendor-hs': ['deckstrings'],
+          manualChunks(id) {
+            const moduleId = id.replaceAll('\\', '/');
+            if (moduleId.includes('/node_modules/react/') ||
+                moduleId.includes('/node_modules/react-dom/') ||
+                moduleId.includes('/node_modules/scheduler/')) {
+              return 'vendor-react';
+            }
+            if (moduleId.includes('/node_modules/motion/') ||
+                moduleId.includes('/node_modules/motion-dom/') ||
+                moduleId.includes('/node_modules/motion-utils/') ||
+                moduleId.includes('/node_modules/framer-motion/')) {
+              return 'vendor-motion';
+            }
+            if (moduleId.includes('/node_modules/@google/genai/')) return 'vendor-genai';
+            if (moduleId.includes('/node_modules/lucide-react/') ||
+                moduleId.includes('/node_modules/idb-keyval/')) {
+              return 'vendor-ui';
+            }
+            if (moduleId.includes('/node_modules/deckstrings/')) return 'vendor-hs';
           },
         },
       },

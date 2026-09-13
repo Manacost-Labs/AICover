@@ -16,8 +16,8 @@ import {
 import type {
   CoverGenerationProgress,
   SceneRole,
-} from "../../services/geminiService";
-import { sceneRolesOrder } from "../../services/geminiService";
+} from "../../services/generationContracts";
+import { sceneRolesOrder } from "../../services/generationContracts";
 import { DeckImportSection } from "../DeckImportSection";
 import { OptimizedImage } from "../OptimizedImage";
 import type {
