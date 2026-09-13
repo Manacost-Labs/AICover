@@ -28,6 +28,7 @@ async function fixture() {
   await put(`${previous}/assets/old.js`, 'old-asset');
   await put(`${candidate}/index.html`, 'candidate-index');
   await put(`${candidate}/assets/geminiService-NewHash1.js`, 'export const generationReady = true;');
+  await put(`${candidate}/assets/vendor-NewHash2.js`, 'export const vendorReady = true;');
   await fs.cp(previous, `${app}/dist`, { recursive: true });
   await put(`${app}/server/index.js`, 'previous-server');
   await put(`${saved}/previous/index`, 'previous-index');
@@ -114,6 +115,33 @@ test('publishes backend before index and rollback restores the exact release', a
   await assert.rejects(fs.lstat(release.targets.cache), (error) => error.code === 'ENOENT');
   const retainedModule = await import(pathToFileURL(`${release.app}/dist/assets/geminiService-NewHash1.js`).href);
   assert.equal(retainedModule.generationReady, true, 'an already-open candidate tab must complete its deferred import');
+
+  await publish({ ...release, hooks: async () => {} });
+  assert.equal(await fs.readFile(release.targets.index, 'utf8'), 'candidate-index');
+  assert.equal(await fs.readFile(`${release.app}/dist/assets/geminiService-NewHash1.js`, 'utf8'), 'export const generationReady = true;');
+});
+
+test('rollback before candidate assets are copied accepts an untouched previous release', async () => {
+  const release = await fixture();
+  await rollback(release);
+  assert.equal(await fs.readFile(release.targets.index, 'utf8'), 'previous-index');
+  assert.equal(await fs.readFile(release.targets.server, 'utf8'), 'previous-server');
+  await assert.rejects(fs.lstat(`${release.app}/dist/assets/geminiService-NewHash1.js`), (error) => error.code === 'ENOENT');
+});
+
+test('rollback after a partial asset upload retains only the chunks that were published', async () => {
+  const release = await fixture();
+  await put(`${release.app}/dist/assets/geminiService-NewHash1.js`, 'export const generationReady = true;');
+  await rollback(release);
+  assert.equal(await fs.readFile(`${release.app}/dist/assets/geminiService-NewHash1.js`, 'utf8'), 'export const generationReady = true;');
+  await assert.rejects(fs.lstat(`${release.app}/dist/assets/vendor-NewHash2.js`), (error) => error.code === 'ENOENT');
+});
+
+test('a retained candidate asset never permits unrelated dist drift', async () => {
+  const release = await fixture();
+  await put(`${release.app}/dist/assets/foreign.js`, 'foreign');
+  await assert.rejects(publish(release), /Foreign asset drift/);
+  assert.equal(await fs.readFile(`${release.app}/dist/assets/foreign.js`, 'utf8'), 'foreign');
 });
 
 test('a backend activation failure automatically restores assets and server files', async () => {

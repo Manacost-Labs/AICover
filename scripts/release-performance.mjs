@@ -213,12 +213,13 @@ export async function validateArchive(saved = BACKUP) {
 }
 
 async function addCandidateAssets(saved, app, manifest) {
-  assert.deepEqual(await inventory(`${app}/dist`), manifest.previousDist, 'Production dist drift before activation');
   for (const [relative, candidateHash] of Object.entries(manifest.candidateDist)) {
     if (relative === 'index.html') continue;
     const target = `${app}/dist/${relative}`;
     const previousHash = manifest.previousDist[relative] ?? null;
-    if (previousHash === candidateHash) continue;
+    const activeHash = await hash(target);
+    if (activeHash === candidateHash) continue;
+    assert.equal(activeHash, previousHash, `Candidate asset preflight drift: ${relative}`);
     const metadata = previousHash === null
       ? { ...manifest.files.index.owner, mode: 0o644 }
       : await owner(target);
@@ -249,12 +250,15 @@ async function restorePreviousAssets(saved, app, manifest) {
 }
 
 async function assertPreviousReleaseAvailable(app, manifest) {
+  const active = await inventory(`${app}/dist`);
   for (const [relative, previousHash] of Object.entries(manifest.previousDist)) {
-    assert.equal(await hash(`${app}/dist/${relative}`), previousHash, `Previous release asset was not restored: ${relative}`);
+    assert.equal(active[relative], previousHash, `Previous release asset was not restored: ${relative}`);
   }
-  for (const [relative, candidateHash] of Object.entries(manifest.candidateDist)) {
+  for (const [relative, activeHash] of Object.entries(active)) {
     if (manifest.previousDist[relative] !== undefined) continue;
-    assert.equal(await hash(`${app}/dist/${relative}`), candidateHash, `Candidate-only deferred asset was not retained: ${relative}`);
+    const candidateHash = manifest.candidateDist[relative];
+    assert(candidateHash, `Foreign asset drift: ${relative}`);
+    assert.equal(activeHash, candidateHash, `Retained candidate asset drift: ${relative}`);
   }
 }
 
@@ -296,6 +300,7 @@ export async function publish({
   for (const [key, descriptor] of Object.entries(manifest.files)) {
     assert.equal(await hash(targets[key]), descriptor.previous, `Preflight drift: ${key}`);
   }
+  await assertPreviousReleaseAvailable(app, manifest);
   let mutated = false;
   try {
     mutated = true;
@@ -373,7 +378,7 @@ export async function verifyLive(saved = BACKUP) {
   await validateSessionStore(manifest.sessionStore);
   await checkLocal(manifest.files.index.candidate, manifest);
   await verifyPublicGate();
-  return { verified: true, sourceCommit: manifest.sourceCommit, immutableAssets: true, sessionPersistence: true };
+  return { verified: true, sourceCommit: manifest.sourceCommit, immutableAssets: true, sessionStorePermissions: true };
 }
 
 function command(binary, args) {
