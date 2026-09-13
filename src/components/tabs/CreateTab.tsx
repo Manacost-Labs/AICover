@@ -92,6 +92,7 @@ interface CreateTabProps {
   onAddCardSource: (entry: CardLibraryEntry) => void;
   onRemoveCardSource: (sourceId: string) => void;
   availability?: "checking" | "available" | "unavailable";
+  exactArtAvailability?: "checking" | "available" | "unavailable";
   onRetryAvailability?: () => void;
   onOpenSettings?: () => void;
   saveWarning?: string | null;
@@ -130,6 +131,12 @@ const progressSteps = [
   { id: 'finalizing', label: 'Финализация' },
 ] as const;
 
+const protectedProgressSteps = [
+  { id: 'preparing', label: 'Маски и глубина' },
+  { id: 'generating', label: 'Окружение' },
+  { id: 'finalizing', label: 'Сборка' },
+] as const;
+
 function imageSource(source: any) {
   return typeof source?.data === 'string' && source.data.startsWith('data:')
     ? source.data
@@ -141,22 +148,31 @@ function GenerationStage({
   sources,
   aspectRatio,
   modelName,
+  protectedArt,
   onCancel,
 }: {
   progress: CoverGenerationProgress | null;
   sources: any[];
   aspectRatio: string;
   modelName: string;
+  protectedArt: boolean;
   onCancel: () => void;
 }) {
   const reducedMotion = useReducedMotion();
   const phase = progress?.phase === 'strict' ? 'finalizing' : progress?.phase || 'preparing';
-  const activeIndex = progressSteps.findIndex(step => step.id === phase);
-  const status = phase === 'preparing'
-    ? 'Собираем исходники без обрезки'
-    : phase === 'finalizing'
-      ? 'Проверяем и сохраняем результат'
-      : 'Модель выстраивает композицию';
+  const steps = protectedArt ? protectedProgressSteps : progressSteps;
+  const activeIndex = steps.findIndex(step => step.id === phase);
+  const status = protectedArt
+    ? phase === 'preparing'
+      ? 'Выделяем персонажей и подбираем глубину'
+      : phase === 'finalizing'
+        ? 'Собираем исходные арты поверх окружения'
+        : 'Создаём окружение без персонажей'
+    : phase === 'preparing'
+      ? 'Собираем исходники без обрезки'
+      : phase === 'finalizing'
+        ? 'Проверяем и сохраняем результат'
+        : 'Модель выстраивает композицию';
   const ratio = /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(aspectRatio) ? aspectRatio.replace(':', ' / ') : '16 / 9';
   return (
     <motion.div
@@ -191,7 +207,7 @@ function GenerationStage({
           <span>{modelName}{progress && progress.total > 1 ? ` · ${progress.done} из ${progress.total}` : ''}</span>
         </div>
         <ol aria-label="Этапы генерации">
-          {progressSteps.map((step, index) => (
+          {steps.map((step, index) => (
             <li key={step.id} className={index < activeIndex ? 'is-complete' : index === activeIndex ? 'is-active' : ''}>
               <span>{index + 1}</span>{step.label}
             </li>
@@ -253,6 +269,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   onAddCardSource,
   onRemoveCardSource,
   availability = "available",
+  exactArtAvailability = "available",
   onRetryAvailability,
   onOpenSettings,
   saveWarning,
@@ -268,17 +285,24 @@ export const CreateTab: React.FC<CreateTabProps> = ({
     createLayoutMode === "cover" ? sources.length >= 2 : filled === scenePlan;
   const openRouterModel = getOpenRouterModel(settings.model);
   const geminiCapabilities = getGeminiImageCapabilities(settings.model);
-  const requiredReferenceCount = sources.length + Number(Boolean(reference)) + Number(Boolean(baseImage));
+  const exactArtRequired = settings.preserveExactArt !== false && !baseImage;
+  const requiredReferenceCount = exactArtRequired
+    ? Number(Boolean(reference))
+    : sources.length + Number(Boolean(reference)) + Number(Boolean(baseImage));
   const automaticImageSize = settings.model === 'gpt-image-2'
     || Boolean(openRouterModel && openRouterModel.resolutions.length === 0);
   const reason = isUpscaling
     ? "Дождитесь завершения апскейла."
-    : settings.model === 'gpt-image-2' && sources.length + Number(Boolean(reference)) + Number(Boolean(baseImage)) > 5
+    : settings.model === 'gpt-image-2' && requiredReferenceCount > 5
       ? 'GPT Image 2 принимает до 5 изображений вместе с референсом и основой. Уберите лишний исходник.'
     : openRouterModel && modelAvailability[openRouterModel.id] === 'unavailable'
       ? `У ${openRouterModel.name} сейчас нет активного endpoint OpenRouter. Выберите другую модель.`
     : openRouterModel && openRouterModel.referenceStrategy !== 'contact-sheet' && requiredReferenceCount > openRouterModel.maxReferences
       ? `${openRouterModel.name} принимает до ${openRouterModel.maxReferences} изображений вместе с референсом и основой.`
+    : exactArtRequired && exactArtAvailability === 'checking'
+      ? 'Проверяем доступность защищённой композиции.'
+    : exactArtRequired && exactArtAvailability === 'unavailable'
+      ? 'Защищённая композиция временно недоступна. Отключите её в «Дополнительно» или повторите проверку.'
     : availability === "checking"
       ? "Проверяем доступность генерации."
       : availability === "unavailable"
@@ -394,6 +418,11 @@ export const CreateTab: React.FC<CreateTabProps> = ({
               </button>
             )}
           </div>
+          {settings.preserveExactArt !== false && !baseImage && (
+            <p className="studio-create__helper">
+              Исходные персонажи будут собраны без перерисовки.
+            </p>
+          )}
           {createLayoutMode === "scene" && (
             <div className="studio-create__plan">
               <button
@@ -802,7 +831,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
           >
             <Settings size={16} />
             Дополнительно{" "}
-            {(settings.strictMode || settings.negativePrompt) && (
+            {(settings.preserveExactArt || settings.strictMode || settings.negativePrompt) && (
               <small title="Дополнительные параметры включены">Вкл.</small>
             )}
             <span>{advanced ? "−" : "+"}</span>
@@ -827,23 +856,51 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   placeholder="Например, текст или размытость"
                 />
               </label>
-              <label className="studio-create__switch">
-                <span>
-                  <strong>Максимальная точность</strong>
-                  <small>Проверить исходники и результат.</small>
-                </span>
-                <input
-                  type="checkbox"
-                  checked={settings.model !== 'gpt-image-2' && settings.strictMode}
-                  disabled={settings.model === 'gpt-image-2'}
-                  onChange={() =>
-                    setSettings((s: any) => ({
-                      ...s,
-                      strictMode: !s.strictMode,
-                    }))
-                  }
-                />
-              </label>
+              {!baseImage ? (
+                <label className="studio-create__switch">
+                  <span>
+                    <strong>Оригинальный арт защищён</strong>
+                    <small>Модель создаёт окружение, персонажи собираются из исходников.</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={settings.preserveExactArt !== false}
+                    onChange={() =>
+                      setSettings((s: any) => ({
+                        ...s,
+                        preserveExactArt: s.preserveExactArt === false,
+                      }))
+                    }
+                  />
+                </label>
+              ) : (
+                <p className="studio-create__helper">
+                  Доработка редактирует всё изображение; исходные пиксели могут измениться.
+                </p>
+              )}
+              {exactArtRequired ? (
+                <p className="studio-create__helper">
+                  Проверка композиции пока доступна только в обычном режиме.
+                </p>
+              ) : (
+                <label className="studio-create__switch">
+                  <span>
+                    <strong>Проверка результата</strong>
+                    <small>Дополнительно проверить композицию и целостность.</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={settings.model !== 'gpt-image-2' && settings.strictMode}
+                    disabled={settings.model === 'gpt-image-2'}
+                    onChange={() =>
+                      setSettings((s: any) => ({
+                        ...s,
+                        strictMode: !s.strictMode,
+                      }))
+                    }
+                  />
+                </label>
+              )}
             </div>
           )}
         </section>
@@ -851,7 +908,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
           {reason && (
             <p className="studio-create__disabled-reason" role="status">
               {reason}{" "}
-              {availability === "unavailable" && onRetryAvailability && (
+              {(availability === "unavailable" || exactArtAvailability === "unavailable") && onRetryAvailability && (
                 <button type="button" onClick={onRetryAvailability}>
                   Повторить
                 </button>
@@ -935,6 +992,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({
             sources={sources}
             aspectRatio={settings.aspectRatio}
             modelName={openRouterModel?.name || settings.model}
+            protectedArt={settings.preserveExactArt !== false && !baseImage}
             onCancel={onCancelGeneration}
           />
         )}

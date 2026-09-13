@@ -11,7 +11,7 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test": "vitest run && npm run test:chatgpt",
-    "test:chatgpt": "node --test server/chatgpt-images.test.js server/chatgpt-router.test.js server/openrouter-image.test.js server/openrouter-models.test.js server/staticAssetCache.test.js scripts/verify-provider-contracts.test.mjs scripts/release-provider-reliability.test.mjs",
+    "test:chatgpt": "node --test server/bria-rmbg.test.js server/chatgpt-images.test.js server/chatgpt-router.test.js server/openrouter-image.test.js server/openrouter-models.test.js server/staticAssetCache.test.js scripts/verify-provider-contracts.test.mjs scripts/release-provider-reliability.test.mjs",
     "verify:providers": "node scripts/verify-provider-contracts.mjs",
     "test:watch": "vitest"
   },

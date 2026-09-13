@@ -30,6 +30,8 @@ export interface GenerationSettings {
   negativePrompt?: string;
   batchSize: number;
   strictMode?: boolean;
+  /** Generate the environment separately and composite source RGB through BRIA alpha masks. */
+  preserveExactArt?: boolean;
   customSystemPromptCreate?: string;
   customSystemPromptEdit?: string;
 }

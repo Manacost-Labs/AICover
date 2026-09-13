@@ -9,8 +9,8 @@ let container: HTMLDivElement, root: Root;
 function props(overrides: Record<string, unknown> = {}) {
   return {
     sources: [], setSources: vi.fn(), createLayoutMode: 'cover', onCreateLayoutModeChange: vi.fn(), scenePlan: 3, onScenePlanChange: vi.fn(), focusedSceneSlot: 'left', onFocusedSceneSlotChange: noop, onRequestSourceUploadForSlot: vi.fn(),
-    reference: null, setReference: noop, settings: { model: 'gemini-2.5-flash-image', aspectRatio: '16:9', imageSize: '1K', prompt: '', negativePrompt: '', batchSize: 1, strictMode: true }, setSettings: vi.fn(), baseImage: null, setBaseImage: vi.fn(), isGenerating: false, handleGenerate: vi.fn(), generationProgress: null, onCancelGeneration: vi.fn(), sceneToCoverWarning: false, results: [], isUpscaling: false, handleUpscale: vi.fn(), setFullscreenImage: vi.fn(), toggleLike: vi.fn(), likedSet: new Set(), error: null,
-    isDragging: false, handleDragOver: noop, handleDragLeave: noop, handleDrop: noop, handleLocalPaste: noop, sourceInputRef: createRef(), refInputRef: createRef(), promptRef: createRef(), handleFileChange: noop, handleDragOverRef: noop, handleDragLeaveRef: noop, handleDropRef: noop, selectReferenceFromLibrary: vi.fn(), ASPECT_RATIOS: ['16:9','1:1'], RESOLUTIONS: ['512px','1K','2K','4K'], isDraggingRef: false, userReferenceLibrary: [], cardLibrary: [], onAddCardSource: noop, onRemoveCardSource: noop, availability: 'available', ...overrides,
+    reference: null, setReference: noop, settings: { model: 'gemini-2.5-flash-image', aspectRatio: '16:9', imageSize: '1K', prompt: '', negativePrompt: '', batchSize: 1, strictMode: true, preserveExactArt: true }, setSettings: vi.fn(), baseImage: null, setBaseImage: vi.fn(), isGenerating: false, handleGenerate: vi.fn(), generationProgress: null, onCancelGeneration: vi.fn(), sceneToCoverWarning: false, results: [], isUpscaling: false, handleUpscale: vi.fn(), setFullscreenImage: vi.fn(), toggleLike: vi.fn(), likedSet: new Set(), error: null,
+    isDragging: false, handleDragOver: noop, handleDragLeave: noop, handleDrop: noop, handleLocalPaste: noop, sourceInputRef: createRef(), refInputRef: createRef(), promptRef: createRef(), handleFileChange: noop, handleDragOverRef: noop, handleDragLeaveRef: noop, handleDropRef: noop, selectReferenceFromLibrary: vi.fn(), ASPECT_RATIOS: ['16:9','1:1'], RESOLUTIONS: ['512px','1K','2K','4K'], isDraggingRef: false, userReferenceLibrary: [], cardLibrary: [], onAddCardSource: noop, onRemoveCardSource: noop, availability: 'available', exactArtAvailability: 'available', ...overrides,
   } as any;
 }
 const source = (id: string, role?: string) => ({ id, role, data: `data:image/png;base64,${id}`, mimeType: 'image/png' });
@@ -56,11 +56,57 @@ describe('Create editor contract', () => {
   it('shows a three-stage generation timeline and a distinct result reveal surface', async () => {
     await render(props({ sources: [source('a'), source('b')], isGenerating: true, generationProgress: { phase: 'generating', done: 0, total: 2 } }));
     expect(container.querySelector('[data-generation-stage="generating"]')).not.toBeNull();
-    expect(container.textContent).toContain('Подготовка');
-    expect(container.textContent).toContain('Создание');
-    expect(container.textContent).toContain('Финализация');
+    expect(container.textContent).toContain('Маски и глубина');
+    expect(container.textContent).toContain('Окружение');
+    expect(container.textContent).toContain('Сборка');
     await render(props({ sources: [source('a'), source('b')], results: ['data:image/png;base64,result'] }));
     expect(container.querySelector('[data-result-reveal="true"]')).not.toBeNull();
+  });
+  it('keeps protected original art visible as the standard scene behavior', async () => {
+    const options = props({ sources: [source('a'), source('b')] });
+    await render(options);
+    expect(container.textContent).toContain('Исходные персонажи будут собраны без перерисовки');
+    await act(async () => container.querySelector<HTMLButtonElement>('.studio-create__advanced-toggle')!.click());
+    expect(container.textContent).toContain('Оригинальный арт защищён');
+    expect(container.textContent).toContain('Модель создаёт окружение, персонажи собираются из исходников.');
+    const checkbox = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+      .find((input) => input.checked && !input.disabled);
+    expect(checkbox).toBeDefined();
+  });
+  it('explains a disabled BRIA capability and does not promise unavailable protected-mode QA', async () => {
+    await render(props({ sources: [source('a'), source('b')], exactArtAvailability: 'unavailable' }));
+    expect(button('Создать 1 вариант').disabled).toBe(true);
+    expect(container.textContent).toContain('Защищённая композиция временно недоступна');
+    await act(async () => container.querySelector<HTMLButtonElement>('.studio-create__advanced-toggle')!.click());
+    expect(container.textContent).not.toContain('Проверка результата');
+    expect(container.textContent).toContain('Проверка композиции пока доступна только в обычном режиме');
+
+    const options = props({
+      sources: [source('a'), source('b')],
+      settings: { ...props().settings, preserveExactArt: false },
+      exactArtAvailability: 'unavailable',
+    });
+    await render(options);
+    expect(container.textContent).toContain('Проверка результата');
+    expect(button('Создать 1 вариант').disabled).toBe(false);
+  });
+  it('does not claim exact-art protection during full-frame refinement', async () => {
+    await render(props({
+      sources: [source('a'), source('b')],
+      baseImage: { data: 'data:image/png;base64,base', mimeType: 'image/png' },
+    }));
+    await act(async () => container.querySelector<HTMLButtonElement>('.studio-create__advanced-toggle')!.click());
+
+    expect(container.textContent).not.toContain('Оригинальный арт защищён');
+    expect(container.textContent).toContain('Доработка редактирует всё изображение');
+  });
+  it('does not count protected character sources as OpenRouter references', async () => {
+    const options = props({ sources: [source('a'), source('b'), source('c'), source('d')] });
+    options.settings.model = 'x-ai/grok-imagine-image-2.0';
+    await render(options);
+
+    expect(container.textContent).not.toContain('принимает до 3 изображений');
+    expect(button('Создать 1 вариант').disabled).toBe(false);
   });
   it('shows only documented sizes for the selected Gemini model', async () => {
     const options = props(); options.settings.model = [...MODELS_NO_512PX][0]; await render(options);

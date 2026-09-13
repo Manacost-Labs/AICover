@@ -46,7 +46,7 @@ beforeEach(() => {
   vi.mocked(get).mockResolvedValue(undefined); vi.mocked(set).mockResolvedValue(undefined);
   state.create = null; state.generate.mockReset(); state.upscale.mockReset(); state.save.mockReset().mockResolvedValue({ id: 'saved' });
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ gemini: true }))));
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ gemini: true, briaRmbg: true }))));
   vi.spyOn(window, 'matchMedia').mockImplementation(query => ({ matches: query.includes('1280'), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: () => true, onchange: null }));
   localStorage.clear();
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
@@ -80,6 +80,22 @@ describe('redesign shell and generation boundaries', () => {
     expect(state.generate).not.toHaveBeenCalled();
   });
 
+  it('blocks protected composition when the BRIA kill switch is off but still allows the legacy path', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ gemini: true, briaRmbg: false })));
+    state.generate.mockResolvedValue([]);
+    await render();
+    await addSources();
+
+    expect(state.create.exactArtAvailability).toBe('unavailable');
+    await act(async () => state.create.handleGenerate());
+    expect(state.generate).not.toHaveBeenCalled();
+    expect(state.create.error).toContain('Защищённая композиция');
+
+    await act(async () => state.create.setSettings((settings: any) => ({ ...settings, preserveExactArt: false })));
+    await act(async () => state.create.handleGenerate());
+    expect(state.generate).toHaveBeenCalledOnce();
+  });
+
   it('persists theme selection without resetting Create inputs', async () => {
     await render(); await addSources();
     await act(async () => state.create.setSettings((settings: any) => ({ ...settings, prompt: 'Keep my prompt' })));
@@ -111,7 +127,7 @@ describe('redesign shell and generation boundaries', () => {
   });
 
   it('keeps a published OpenRouter variant when the next paid variant fails', async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ gemini: true, openrouter: true })));
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ gemini: true, openrouter: true, briaRmbg: true })));
     state.generate.mockImplementation(async (...args: any[]) => {
       await args[8]('data:image/png;base64,first-paid-result');
       throw new Error('Второй вариант не создан');
@@ -133,8 +149,31 @@ describe('redesign shell and generation boundaries', () => {
     expect(set).toHaveBeenCalledWith('fusion_history', ['data:image/png;base64,first-paid-result']);
   });
 
+  it('keeps a protected Gemini variant when the next paid variant fails', async () => {
+    state.generate.mockImplementation(async (...args: any[]) => {
+      await args[8]('data:image/png;base64,first-protected-result');
+      throw new Error('Второй вариант не создан');
+    });
+    await render();
+    await addSources();
+    await act(async () => state.create.setSettings((settings: any) => ({
+      ...settings,
+      model: 'gemini-2.5-flash-image',
+      batchSize: 2,
+      preserveExactArt: true,
+    })));
+
+    await act(async () => state.create.handleGenerate());
+    await settle();
+
+    expect(state.create.results).toEqual(['data:image/png;base64,first-protected-result']);
+    expect(state.create.error).toContain('Второй вариант не создан');
+    expect(state.save).toHaveBeenCalledWith('data:image/png;base64,first-protected-result');
+    expect(set).toHaveBeenCalledWith('fusion_history', ['data:image/png;base64,first-protected-result']);
+  });
+
   it('keeps the OpenRouter result visible and stops when both history stores fail', async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ gemini: true, openrouter: true })));
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ gemini: true, openrouter: true, briaRmbg: true })));
     state.save.mockResolvedValue(null);
     state.generate.mockImplementation(async (...args: any[]) => {
       await args[8]('data:image/png;base64,unpersisted-paid-result');
@@ -172,6 +211,61 @@ describe('redesign shell and generation boundaries', () => {
     expect(state.create.results).toEqual([]);
     await act(async () => { second.resolve(['new']); await secondCall; });
     expect(state.create.results).toEqual(['new']); expect(state.create.isGenerating).toBe(false);
+  });
+
+  it('ignores an incremental callback that finishes after cancellation and a new run', async () => {
+    const oldLocalSave = deferred<void>();
+    const oldServerSave = deferred<unknown>();
+    vi.mocked(set).mockImplementation(async (_key, value) => {
+      if (Array.isArray(value) && value[0] === 'data:image/png;base64,old') {
+        await oldLocalSave.promise;
+      }
+    });
+    state.save.mockImplementation(async (url: string) => {
+      if (url === 'data:image/png;base64,old') return oldServerSave.promise;
+      return { id: 'saved' };
+    });
+    state.generate
+      .mockImplementationOnce(async (...args: any[]) => {
+        await args[8]('data:image/png;base64,old');
+        await args[8]('data:image/png;base64,late-old');
+        return ['data:image/png;base64,old', 'data:image/png;base64,late-old'];
+      })
+      .mockImplementationOnce(async (...args: any[]) => {
+        await args[8]('data:image/png;base64,new');
+        return ['data:image/png;base64,new'];
+      });
+    await render();
+    await addSources();
+
+    let firstCall!: Promise<void>;
+    await act(async () => {
+      firstCall = state.create.handleGenerate();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(state.save).toHaveBeenCalledWith('data:image/png;base64,old'));
+    await act(async () => state.create.onCancelGeneration());
+
+    let secondCall!: Promise<void>;
+    await act(async () => {
+      secondCall = state.create.handleGenerate();
+      await secondCall;
+    });
+    expect(state.create.results).toEqual(['data:image/png;base64,new']);
+    expect(state.create.saveWarning).toBeNull();
+
+    await act(async () => {
+      oldLocalSave.resolve();
+      oldServerSave.resolve(null);
+      await firstCall;
+    });
+
+    expect(state.create.results).toEqual(['data:image/png;base64,new']);
+    expect(state.create.saveWarning).toBeNull();
+    expect(state.create.error).toBeNull();
+    expect(vi.mocked(set).mock.calls.some(([, value]) => (
+      Array.isArray(value) && value.includes('data:image/png;base64,late-old')
+    ))).toBe(false);
   });
 
   it('does not issue two generation requests from repeated synchronous clicks', async () => {

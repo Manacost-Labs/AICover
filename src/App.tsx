@@ -241,7 +241,8 @@ function AppContent() {
     prompt: "",
     negativePrompt: "",
     batchSize: 1,
-    strictMode: true
+    strictMode: true,
+    preserveExactArt: true,
   });
   const [results, setResults] = useState<string[]>([]);
 
@@ -265,6 +266,7 @@ function AppContent() {
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState(false);
   const [hasOpenRouter, setHasOpenRouter] = useState(false);
+  const [hasBriaRmbg, setHasBriaRmbg] = useState(false);
   const [checkingKey, setCheckingKey] = useState(true);
   const historyRef = useRef(history);
   historyRef.current = history;
@@ -484,18 +486,21 @@ function AppContent() {
         const selected = await window.aistudio.hasSelectedApiKey();
         setHasKey(selected);
         setHasOpenRouter(false);
+        setHasBriaRmbg(false);
       } else {
         // The production key is deliberately server-only. This endpoint returns
         // a capability flag, never a credential.
         const response = await fetch('/api/runtime-capabilities', { credentials: 'same-origin' });
         if (!response.ok) throw new Error(`Runtime capabilities unavailable: HTTP ${response.status}`);
-        const capabilities = await response.json() as { gemini?: unknown; openrouter?: unknown };
+        const capabilities = await response.json() as { gemini?: unknown; openrouter?: unknown; briaRmbg?: unknown };
         setHasKey(capabilities.gemini === true);
         setHasOpenRouter(capabilities.openrouter === true);
+        setHasBriaRmbg(capabilities.briaRmbg === true);
       }
     } catch (e) {
       setHasKey(false);
       setHasOpenRouter(false);
+      setHasBriaRmbg(false);
     } finally {
       setCheckingKey(false);
     }
@@ -674,6 +679,10 @@ function AppContent() {
 
   const handleGenerate = async () => {
     if (generationActive.current || isUpscaling) return;
+    if (settings.preserveExactArt !== false && !baseImage && (!hasBriaRmbg || checkingKey)) {
+      setError('Защищённая композиция временно недоступна на сервере. Отключите её в «Дополнительно» или повторите проверку.');
+      return;
+    }
     const providerUnavailable = settings.model === 'gpt-image-2'
       ? !chatGpt.connected || chatGpt.checking
       : isOpenRouterImageModel(settings.model)
@@ -709,10 +718,16 @@ function AppContent() {
       phase: 'preparing',
     });
     const openRouterRun = isOpenRouterImageModel(settings.model);
+    const exactArtRun = Boolean(settings.preserveExactArt && !baseImage);
+    const incrementalRun = openRouterRun || exactArtRun;
     const historyBeforeRun = historyRef.current;
     const streamedImages: string[] = [];
-    const publishOpenRouterResult = openRouterRun
+    const isCurrentGeneration = () => (
+      generationRunId.current === runId && !controller.signal.aborted
+    );
+    const publishIncrementalResult = incrementalRun
       ? async (imageUrl: string) => {
+          if (!isCurrentGeneration()) return;
           streamedImages.push(imageUrl);
           const visibleImages = [...streamedImages];
           const newHistory = [...visibleImages, ...historyBeforeRun].slice(0, 100);
@@ -724,6 +739,7 @@ function AppContent() {
             set('fusion_history', newHistory).then(() => true).catch(() => false),
             saveToHistory(imageUrl).catch(() => null),
           ]);
+          if (!isCurrentGeneration()) return;
           setGenerationNotice(null);
           if (!saved) {
             setSaveWarning('Не удалось сохранить результат в историю на сервере. Скачайте изображение, чтобы не потерять его.');
@@ -744,12 +760,21 @@ function AppContent() {
         ordered, reference, settings, baseImage, likedImages, referenceVisionNotes,
         (p) => { if (generationRunId.current === runId) setGenerationProgress(p); },
         controller.signal,
-        publishOpenRouterResult,
+        publishIncrementalResult,
       );
 
       if (generationRunId.current !== runId) return;
 
-      if (!openRouterRun) {
+      // The protected pipeline normally publishes each composite as soon as it
+      // exists. Keep this successful-return fallback so a provider adapter can
+      // never make a completed image invisible by omitting the callback.
+      if (incrementalRun && publishIncrementalResult && images.length > streamedImages.length) {
+        for (const image of images.slice(streamedImages.length)) {
+          await publishIncrementalResult(image);
+        }
+      }
+
+      if (!incrementalRun) {
         setGenerationProgress({
           done: images.length,
           total: settings.batchSize,
@@ -1049,6 +1074,11 @@ function AppContent() {
     : isOpenRouterImageModel(settings.model)
       ? checkingKey ? 'checking' : hasOpenRouter ? 'available' : 'unavailable'
     : checkingKey ? 'checking' : hasKey ? 'available' : 'unavailable';
+  const exactArtAvailability = checkingKey
+    ? 'checking'
+    : hasBriaRmbg
+      ? 'available'
+      : 'unavailable';
 
   return (
     <div data-theme={theme} className="cover-workspace studio-workspace">
@@ -1448,6 +1478,7 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
             <CreateTab
               key="create"
               availability={availability}
+              exactArtAvailability={exactArtAvailability}
               onRetryAvailability={() => void checkKey()}
               onOpenSettings={() => setShowSettings(true)}
               saveWarning={saveWarning}

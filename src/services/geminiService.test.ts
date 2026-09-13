@@ -4,6 +4,11 @@ import { composeOpenRouterReferenceSheet } from './openRouterReferenceComposer';
 import { normalizeGeminiImageSettings, supportsGeminiAspectRatio, supportsGeminiImageSize } from '../constants';
 
 const gemini = vi.hoisted(() => ({ generateContent: vi.fn() }));
+const exactArt = vi.hoisted(() => ({
+  prepareSubjectLayers: vi.fn(),
+  compositeExactArtScene: vi.fn(),
+  validateExactArtRaster: vi.fn(),
+}));
 
 function base64OfByteLength(byteLength: number): string {
   const padding = (3 - (byteLength % 3)) % 3;
@@ -27,7 +32,22 @@ vi.mock('./openRouterReferenceComposer', () => ({
   composeOpenRouterReferenceSheet: vi.fn(async () => ({ mimeType: 'image/webp', data: 'UklGRgAAAABXRUJQ' })),
 }));
 
-afterEach(() => gemini.generateContent.mockReset());
+vi.mock('./subjectLayer', () => ({
+  prepareSubjectLayers: exactArt.prepareSubjectLayers,
+}));
+
+vi.mock('./exactArtComposer', async importOriginal => ({
+  ...await importOriginal<typeof import('./exactArtComposer')>(),
+  compositeExactArtScene: exactArt.compositeExactArtScene,
+  validateExactArtRaster: exactArt.validateExactArtRaster,
+}));
+
+afterEach(() => {
+  gemini.generateContent.mockReset();
+  exactArt.prepareSubjectLayers.mockReset();
+  exactArt.compositeExactArtScene.mockReset();
+  exactArt.validateExactArtRaster.mockReset();
+});
 
 describe('Gemini image model contracts', () => {
   it('normalizes sizes and aspect ratios to the documented stable model capabilities', () => {
@@ -108,6 +128,47 @@ describe('server-storage image sources', () => {
 
     expect(inline).toEqual(expect.objectContaining({ mimeType: 'image/png' }));
     expect(inline.data).not.toContain('/uploads/');
+  });
+
+  it('rejects a declared oversized URL image before buffering its body', async () => {
+    const response = new Response(new Uint8Array([0x89]), {
+      headers: {
+        'Content-Type': 'image/png',
+        'Content-Length': String(32 * 1024 * 1024 + 1),
+      },
+    });
+    const blob = vi.spyOn(response, 'blob');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    await expect(normalizeImageSource({
+      data: '/uploads/history/oversized.png',
+      mimeType: 'image/png',
+    })).rejects.toThrow('слишком большое');
+
+    expect(blob).not.toHaveBeenCalled();
+  });
+
+  it('threads cancellation into URL image hydration', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const controller = new AbortController();
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      if (!init?.signal) {
+        reject(new Error('missing abort signal'));
+        return;
+      }
+      init.signal.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const work = normalizeImageSource({
+      data: '/uploads/history/slow.png',
+      mimeType: 'image/png',
+    }, controller.signal);
+    await Promise.resolve();
+    controller.abort(new DOMException('Отменено', 'AbortError'));
+
+    await expect(work).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchMock).toHaveBeenCalledWith('/uploads/history/slow.png', { signal: controller.signal });
   });
 });
 
@@ -405,5 +466,360 @@ describe('OpenRouter cover generation routing', () => {
     expect(publish).toHaveBeenCalledOnce();
     expect(publish).toHaveBeenCalledWith(firstImage);
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/thumbnail/openrouter-generate')).toHaveLength(2);
+  });
+});
+
+describe('protected original-art generation', () => {
+  const validPngHeader = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
+  const validPngDataUrl = `data:image/png;base64,${validPngHeader}`;
+  const oversizedPngDataUrl = () => {
+    const bytes = new Uint8Array(24);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(16, 20_000);
+    view.setUint32(20, 20_000);
+    return `data:image/png;base64,${btoa(String.fromCharCode(...bytes))}`;
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('asks the model for an empty environment and composites original pixels after BRIA masking', async () => {
+    gemini.generateContent.mockResolvedValueOnce({ text: '' });
+    exactArt.prepareSubjectLayers.mockResolvedValueOnce([{
+      provider: 'rmbg-2.0',
+      cache: 'miss',
+      cacheKey: 'a'.repeat(64),
+      image: { mimeType: 'image/png', data: 'iVBORw0KGgo=' },
+      sourceIndex: 0,
+    }]);
+    exactArt.compositeExactArtScene.mockResolvedValueOnce('data:image/png;base64,final');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      imageUrl: 'data:image/png;base64,background',
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+    const progress = vi.fn();
+
+    await expect(generateFusedCover(
+      [{ data: validPngDataUrl, mimeType: 'image/png', role: 'left' }],
+      null,
+      {
+        model: 'gpt-image-2',
+        aspectRatio: '16:9',
+        imageSize: '1K',
+        prompt: 'A volcanic battlefield',
+        batchSize: 1,
+        strictMode: true,
+        preserveExactArt: true,
+      },
+      null,
+      [],
+      null,
+      progress,
+    )).resolves.toEqual(['data:image/png;base64,final']);
+
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(request.references).toEqual([]);
+    expect(request.prompt).toContain('BACKGROUND PLATE ONLY');
+    expect(request.prompt).toContain('no characters, people, creatures, bodies, faces, limbs');
+    expect(exactArt.prepareSubjectLayers).toHaveBeenCalledWith([
+      { data: validPngHeader, mimeType: 'image/png' },
+    ], expect.any(AbortSignal), { concurrency: 2 });
+    expect(exactArt.compositeExactArtScene).toHaveBeenCalledWith(expect.objectContaining({
+      background: 'data:image/png;base64,background',
+      sources: [{ data: validPngHeader, mimeType: 'image/png' }],
+    }));
+    expect(progress.mock.calls.map(([value]) => value.phase)).toEqual([
+      'preparing',
+      'generating',
+      'finalizing',
+      'finalizing',
+    ]);
+  });
+
+  it('rejects an oversized compressed source before any provider call', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    gemini.generateContent.mockResolvedValue({ text: '' });
+    exactArt.prepareSubjectLayers.mockResolvedValue([]);
+    exactArt.compositeExactArtScene.mockResolvedValue('data:image/png;base64,should-not-exist');
+
+    await expect(generateFusedCover(
+      [{ data: oversizedPngDataUrl(), mimeType: 'image/png', role: 'left' }],
+      null,
+      { model: 'gpt-image-2', aspectRatio: '16:9', imageSize: '1K', prompt: '', batchSize: 1, preserveExactArt: true },
+    )).rejects.toThrow('слишком большое');
+
+    expect(exactArt.prepareSubjectLayers).not.toHaveBeenCalled();
+    expect(gemini.generateContent).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(exactArt.compositeExactArtScene).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized compressed composition reference before any provider call', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    gemini.generateContent.mockResolvedValue({ text: '' });
+    exactArt.prepareSubjectLayers.mockResolvedValue([]);
+    exactArt.compositeExactArtScene.mockResolvedValue('data:image/png;base64,should-not-exist');
+
+    await expect(generateFusedCover(
+      [{ data: validPngDataUrl, mimeType: 'image/png', role: 'left' }],
+      { data: oversizedPngDataUrl(), mimeType: 'image/png' },
+      { model: 'gpt-image-2', aspectRatio: '16:9', imageSize: '1K', prompt: '', batchSize: 1, preserveExactArt: true },
+    )).rejects.toThrow('слишком большое');
+
+    expect(exactArt.prepareSubjectLayers).not.toHaveBeenCalled();
+    expect(gemini.generateContent).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(exactArt.compositeExactArtScene).not.toHaveBeenCalled();
+  });
+
+  it('fully decodes every source before starting any provider call', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      Uint8Array.from(atob(validPngHeader), (character) => character.charCodeAt(0)),
+      { headers: { 'Content-Type': 'image/png' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    gemini.generateContent.mockResolvedValue({ text: '' });
+    exactArt.validateExactArtRaster.mockRejectedValueOnce(
+      new Error('Не удалось прочитать изображение для точной композиции.'),
+    );
+    exactArt.prepareSubjectLayers.mockResolvedValue([]);
+
+    await expect(generateFusedCover(
+      [{ data: '/uploads/truncated.png', mimeType: 'image/png', role: 'left' }],
+      null,
+      { model: 'gpt-image-2', aspectRatio: '16:9', imageSize: '1K', prompt: '', batchSize: 1, preserveExactArt: true },
+    )).rejects.toThrow('Не удалось прочитать');
+
+    expect(exactArt.validateExactArtRaster).toHaveBeenCalledWith(validPngDataUrl, expect.any(AbortSignal));
+    expect(exactArt.prepareSubjectLayers).not.toHaveBeenCalled();
+    expect(gemini.generateContent).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith('/uploads/truncated.png', expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
+  });
+
+  it('reuses the single validated URL snapshot for composition Vision', async () => {
+    const validBytes = Uint8Array.from(atob(validPngHeader), (character) => character.charCodeAt(0));
+    let sourceHydrations = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === '/uploads/mutable.png') {
+        sourceHydrations += 1;
+        const body = sourceHydrations === 1
+          ? validBytes
+          : Uint8Array.from(atob(oversizedPngDataUrl().split(',')[1]), (character) => character.charCodeAt(0));
+        return new Response(body, { headers: { 'Content-Type': 'image/png' } });
+      }
+      return new Response(JSON.stringify({ imageUrl: 'data:image/png;base64,background' }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    gemini.generateContent.mockResolvedValueOnce({ text: '' });
+    exactArt.prepareSubjectLayers.mockResolvedValueOnce([{
+      provider: 'rmbg-2.0', cache: 'hit', cacheKey: 'a'.repeat(64),
+      image: { mimeType: 'image/png', data: 'mask' }, sourceIndex: 0,
+    }]);
+    exactArt.compositeExactArtScene.mockResolvedValueOnce('data:image/png;base64,final');
+
+    await expect(generateFusedCover(
+      [{ data: '/uploads/mutable.png', mimeType: 'image/png', role: 'left' }],
+      null,
+      { model: 'gpt-image-2', aspectRatio: '16:9', imageSize: '1K', prompt: '', batchSize: 1, preserveExactArt: true },
+    )).resolves.toEqual(['data:image/png;base64,final']);
+
+    expect(sourceHydrations).toBe(1);
+    const visionRequest = gemini.generateContent.mock.calls[0][0];
+    expect(visionRequest.contents.parts).toContainEqual({
+      inlineData: { data: validPngHeader, mimeType: 'image/png' },
+    });
+  });
+
+  it('persists the final OpenRouter composite before acknowledging its paid background job', async () => {
+    gemini.generateContent.mockResolvedValueOnce({ text: '' });
+    exactArt.prepareSubjectLayers.mockResolvedValueOnce([{
+      provider: 'rmbg-2.0',
+      cache: 'hit',
+      cacheKey: 'a'.repeat(64),
+      image: { mimeType: 'image/png', data: 'iVBORw0KGgo=' },
+      sourceIndex: 0,
+    }]);
+    exactArt.compositeExactArtScene.mockResolvedValueOnce('data:image/png;base64,final');
+    const events: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        events.push('acknowledge');
+        return new Response(null, { status: 204 });
+      }
+      if (url === '/api/thumbnail/openrouter-generate') {
+        return new Response(JSON.stringify({ jobId: '9f8483e6-cb34-40fe-8a5c-73c4bc6beff7', status: 'pending' }), { status: 202 });
+      }
+      return new Response(JSON.stringify({ status: 'complete', imageUrl: 'data:image/png;base64,background' }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const publish = vi.fn(async (url: string) => {
+      events.push(`publish:${url}`);
+    });
+
+    await expect(generateFusedCover(
+      [{ data: validPngDataUrl, mimeType: 'image/png', role: 'left' }],
+      null,
+      {
+        model: 'bytedance-seed/seedream-5-0-pro',
+        aspectRatio: '16:9',
+        imageSize: '1K',
+        prompt: 'A volcanic battlefield',
+        batchSize: 1,
+        preserveExactArt: true,
+      },
+      null,
+      [],
+      null,
+      undefined,
+      undefined,
+      publish,
+    )).resolves.toEqual(['data:image/png;base64,final']);
+
+    expect(publish).toHaveBeenCalledWith('data:image/png;base64,final');
+    expect(events).toEqual(['publish:data:image/png;base64,final', 'acknowledge']);
+  });
+
+  it('publishes a completed Gemini composite before a later paid variant fails', async () => {
+    gemini.generateContent
+      .mockResolvedValueOnce({ text: '' })
+      .mockResolvedValueOnce({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'background-one' } }] } }] })
+      .mockRejectedValueOnce(new Error('second Gemini variant failed'));
+    exactArt.prepareSubjectLayers.mockResolvedValueOnce([{
+      provider: 'rmbg-2.0', cache: 'hit', cacheKey: 'a'.repeat(64),
+      image: { mimeType: 'image/png', data: 'mask' }, sourceIndex: 0,
+    }]);
+    exactArt.compositeExactArtScene.mockResolvedValueOnce('data:image/png;base64,final-one');
+    const publish = vi.fn();
+
+    await expect(generateFusedCover(
+      [{ data: validPngDataUrl, mimeType: 'image/png', role: 'left' }],
+      null,
+      { model: 'gemini-2.5-flash-image', aspectRatio: '16:9', imageSize: '1K', prompt: '', batchSize: 2, preserveExactArt: true },
+      null, [], null, undefined, undefined, publish,
+    )).rejects.toThrow('second Gemini variant failed');
+
+    expect(exactArt.compositeExactArtScene).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith('data:image/png;base64,final-one');
+  });
+
+  it('publishes a completed ChatGPT composite before a later paid variant fails', async () => {
+    gemini.generateContent.mockResolvedValueOnce({ text: '' });
+    exactArt.prepareSubjectLayers.mockResolvedValueOnce([{
+      provider: 'rmbg-2.0', cache: 'hit', cacheKey: 'a'.repeat(64),
+      image: { mimeType: 'image/png', data: 'mask' }, sourceIndex: 0,
+    }]);
+    exactArt.compositeExactArtScene.mockResolvedValueOnce('data:image/png;base64,final-one');
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ imageUrl: 'data:image/png;base64,background-one' })))
+      .mockResolvedValueOnce(new Response('{}', { status: 500 })));
+    const publish = vi.fn();
+
+    await expect(generateFusedCover(
+      [{ data: validPngDataUrl, mimeType: 'image/png', role: 'left' }],
+      null,
+      { model: 'gpt-image-2', aspectRatio: '16:9', imageSize: '1K', prompt: '', batchSize: 2, preserveExactArt: true },
+      null, [], null, undefined, undefined, publish,
+    )).rejects.toThrow('Не удалось сгенерировать изображение');
+
+    expect(exactArt.compositeExactArtScene).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith('data:image/png;base64,final-one');
+  });
+
+  it('stops before the next Gemini background variant after cancellation', async () => {
+    let resolveFirstBackground!: (value: unknown) => void;
+    const firstBackground = new Promise((resolve) => { resolveFirstBackground = resolve; });
+    gemini.generateContent
+      .mockResolvedValueOnce({ text: '' })
+      .mockReturnValueOnce(firstBackground)
+      .mockResolvedValueOnce({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'late' } }] } }] });
+    exactArt.prepareSubjectLayers.mockResolvedValueOnce([{
+      provider: 'rmbg-2.0', cache: 'miss', cacheKey: 'a'.repeat(64),
+      image: { mimeType: 'image/png', data: 'mask' }, sourceIndex: 0,
+    }]);
+    const controller = new AbortController();
+    const work = generateFusedCover(
+      [{ data: validPngDataUrl, mimeType: 'image/png', role: 'left' }],
+      null,
+      { model: 'gemini-2.5-flash-image', aspectRatio: '16:9', imageSize: '1K', prompt: '', batchSize: 2, preserveExactArt: true },
+      null, [], null, undefined, controller.signal,
+    );
+    await vi.waitFor(() => expect(gemini.generateContent).toHaveBeenCalledTimes(2));
+    controller.abort(new DOMException('Генерация отменена.', 'AbortError'));
+    resolveFirstBackground({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'first' } }] } }] });
+
+    await expect(work).rejects.toMatchObject({ name: 'AbortError' });
+    expect(gemini.generateContent).toHaveBeenCalledTimes(2);
+    expect(gemini.generateContent.mock.calls[1][0].config.abortSignal).toBe(controller.signal);
+  });
+
+  it('rejects a known Recraft incompatibility before requesting paid BRIA masks', async () => {
+    gemini.generateContent.mockResolvedValueOnce({ text: '' });
+    exactArt.prepareSubjectLayers.mockResolvedValueOnce([]);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateFusedCover(
+      [{ data: validPngDataUrl, mimeType: 'image/png', role: 'left' }],
+      null,
+      { model: 'recraft/recraft-v4-styles-pro', aspectRatio: '16:9', imageSize: '1K', prompt: '', batchSize: 1, preserveExactArt: true },
+    )).rejects.toThrow('нужен референс композиции');
+
+    expect(exactArt.prepareSubjectLayers).not.toHaveBeenCalled();
+    expect(gemini.generateContent).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ChatGPT', 'gpt-image-2'],
+    ['OpenRouter', 'x-ai/grok-imagine-image-2.0'],
+  ])('rejects an unsupported %s composition reference before requesting paid BRIA masks', async (_provider, model) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateFusedCover(
+      [{ data: validPngDataUrl, mimeType: 'image/png', role: 'left' }],
+      { data: 'data:image/gif;base64,R0lGODlhAQABAIAAAAUEBA==', mimeType: 'image/gif' },
+      { model, aspectRatio: '16:9', imageSize: '1K', prompt: '', batchSize: 1, preserveExactArt: true },
+    )).rejects.toThrow('PNG, JPG и WEBP');
+
+    expect(exactArt.prepareSubjectLayers).not.toHaveBeenCalled();
+    expect(gemini.generateContent).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('compresses the protected Riverflow composition reference to its 3 MiB contract', async () => {
+    vi.mocked(composeOpenRouterReferenceSheet).mockClear();
+    gemini.generateContent.mockResolvedValueOnce({ text: '' });
+    exactArt.prepareSubjectLayers.mockResolvedValueOnce([{
+      provider: 'rmbg-2.0', cache: 'hit', cacheKey: 'a'.repeat(64),
+      image: { mimeType: 'image/png', data: 'mask' }, sourceIndex: 0,
+    }]);
+    exactArt.compositeExactArtScene.mockResolvedValueOnce('data:image/png;base64,final');
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ jobId: '9f8483e6-cb34-40fe-8a5c-73c4bc6beff7', status: 'pending' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'complete', imageUrl: 'data:image/png;base64,background' })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateFusedCover(
+      [{ data: validPngDataUrl, mimeType: 'image/png', role: 'left' }],
+      { data: validPngDataUrl, mimeType: 'image/png' },
+      { model: 'sourceful/riverflow-v2.5-pro', aspectRatio: '16:9', imageSize: '1K', prompt: '', batchSize: 1, preserveExactArt: true },
+    )).resolves.toEqual(['data:image/png;base64,final']);
+
+    expect(composeOpenRouterReferenceSheet).toHaveBeenCalledWith([{
+      label: 'COMPOSITION',
+      reference: { data: validPngHeader, mimeType: 'image/png' },
+    }], expect.any(AbortSignal), { maxBytes: 3 * 1024 * 1024 });
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(request.references).toEqual([{ mimeType: 'image/webp', data: 'UklGRgAAAABXRUJQ' }]);
   });
 });

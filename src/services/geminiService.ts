@@ -3,8 +3,10 @@ import { MODELS_SUPPORTING_IMAGE_SIZE, normalizeGeminiImageSettings } from "../c
 import { CHATGPT_IMAGE_MODEL, MAX_CHATGPT_IMAGE_REFERENCES, createChatGPTImageGenerator, prepareImageReferences, type ChatGPTImageReference } from "./chatgptImages";
 import { buildCompositionPlannerPrompt, formatCompositionPlan, resolveCompositionPlan, type CompositionPlan } from "./compositionPlanner";
 import { createGeminiClient } from "./geminiClient";
+import { compositeExactArtScene, preflightExactArtRaster, validateExactArtRaster } from "./exactArtComposer";
 import { generateOpenRouterImage, getOpenRouterModel, isOpenRouterImageModel, type OpenRouterImageReference } from "./openRouterImages";
 import { composeOpenRouterReferenceSheet } from "./openRouterReferenceComposer";
+import { prepareSubjectLayers } from "./subjectLayer";
 import {
   DEFAULT_SYSTEM_PROMPT_CREATE,
   DEFAULT_SYSTEM_PROMPT_EDIT,
@@ -31,6 +33,7 @@ import type { CoverGenerationProgress } from "./generationContracts";
 /** Multimodal vision for composition / QA (not the image generator). */
 const VISION_MODEL = "gemini-3.1-flash-lite-preview";
 const COMPOSITION_PLANNER_TIMEOUT_MS = 8_000;
+const MAX_REMOTE_IMAGE_BYTES = 32 * 1024 * 1024;
 
 function fusionSourceLabel(src: FusionSource, indexZeroBased: number): string {
   const r = src.role;
@@ -111,26 +114,114 @@ function optionalGeminiReferenceLimit(model: string, requiredImages: number, des
  * Favorite / benchmark image URL → Gemini inlineData payload.
  * Supports data URLs and http(s) public URLs from the Cover service.
  */
-export async function likedUrlToInlineData(likedUrl: string): Promise<{ data: string; mimeType: string } | null> {
+function throwIfImageHydrationAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('Image loading was cancelled.', 'AbortError');
+}
+
+async function readBoundedImageResponse(response: Response, signal?: AbortSignal): Promise<Blob> {
+  throwIfImageHydrationAborted(signal);
+  const declaredLength = response.headers.get('content-length');
+  if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > MAX_REMOTE_IMAGE_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error('Изображение слишком большое для безопасной загрузки.');
+  }
+
+  const mimeType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  if (!mimeType?.startsWith('image/')) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error('Сервер вернул не изображение.');
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) return new Blob([], { type: mimeType });
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  const onAbort = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    while (true) {
+      throwIfImageHydrationAborted(signal);
+      const { done, value } = await reader.read();
+      throwIfImageHydrationAborted(signal);
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_REMOTE_IMAGE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error('Изображение слишком большое для безопасной загрузки.');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+  }
+
+  const combined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new Blob([combined.buffer], { type: mimeType });
+}
+
+function blobToDataUrl(blob: Blob, signal?: AbortSignal): Promise<string> {
+  throwIfImageHydrationAborted(signal);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    let settled = false;
+    const cleanup = () => signal?.removeEventListener('abort', onAbort);
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => {
+      const reason = signal?.reason instanceof Error
+        ? signal.reason
+        : new DOMException('Image loading was cancelled.', 'AbortError');
+      if (reader.readyState === FileReader.LOADING) reader.abort();
+      fail(reason);
+    };
+    reader.onload = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(String(reader.result));
+    };
+    reader.onerror = () => fail(reader.error ?? new Error('FileReader'));
+    reader.onabort = () => fail(new DOMException('Image loading was cancelled.', 'AbortError'));
+    signal?.addEventListener('abort', onAbort, { once: true });
+    reader.readAsDataURL(blob);
+  });
+}
+
+export async function likedUrlToInlineData(
+  likedUrl: string,
+  signal?: AbortSignal,
+): Promise<{ data: string; mimeType: string } | null> {
+  throwIfImageHydrationAborted(signal);
   const dataMatch = likedUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
   if (dataMatch) {
     return { data: dataMatch[2], mimeType: dataMatch[1] };
   }
   if (likedUrl.startsWith("/") || likedUrl.startsWith("http://") || likedUrl.startsWith("https://")) {
     try {
-      const res = await fetch(likedUrl);
+      const res = signal ? await fetch(likedUrl, { signal }) : await fetch(likedUrl);
       if (!res.ok) return null;
-      const blob = await res.blob();
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const fr = new FileReader();
-        fr.onloadend = () => resolve(fr.result as string);
-        fr.onerror = () => reject(new Error("FileReader"));
-        fr.readAsDataURL(blob);
-      });
+      const blob = await readBoundedImageResponse(res, signal);
+      const dataUrl = await blobToDataUrl(blob, signal);
       const m = dataUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
       if (!m) return null;
       return { data: m[2], mimeType: m[1] };
     } catch (e) {
+      if (signal?.aborted) throwIfImageHydrationAborted(signal);
+      if (e instanceof Error && e.message.includes('слишком большое')) throw e;
       console.error("likedUrlToInlineData", e);
       return null;
     }
@@ -376,7 +467,9 @@ async function planFusionComposition(
       throwIfPlannerAborted();
       const ai = existingClient ?? await createGeminiClient();
       throwIfPlannerAborted();
-      const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
+      const normalizedSources = await Promise.all(
+        sources.map((source) => normalizeImageSource(source, controller.signal)),
+      );
       throwIfPlannerAborted();
       const parts: any[] = [{ text: buildCompositionPlannerPrompt(input) }];
       normalizedSources.forEach((source, index) => {
@@ -612,9 +705,9 @@ async function generateChatGPTFusedCover(
 
   onProgress?.({ done: 0, total: settings.batchSize, phase: 'preparing' });
   const compositionPlan = baseImage ? null : await planFusionComposition(sources, settings, undefined, signal);
-  const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
-  const normalizedReference = reference ? await normalizeImageSource(reference) : null;
-  const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
+  const normalizedSources = await Promise.all(sources.map((source) => normalizeImageSource(source, signal)));
+  const normalizedReference = reference ? await normalizeImageSource(reference, signal) : null;
+  const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage, signal) : null;
   // Labels stay in the prompt; the API accepts the compact image shape only.
   const references: ChatGPTImageReference[] = normalizedSources.map(({ data, mimeType }) => ({ data, mimeType }));
 
@@ -625,7 +718,7 @@ async function generateChatGPTFusedCover(
   // never displaced; the UI can surface that excess likes were not sent to GPT.
   for (const likedUrl of likedImages) {
     if (references.length >= MAX_CHATGPT_IMAGE_REFERENCES) break;
-    const inline = await likedUrlToInlineData(likedUrl);
+    const inline = await likedUrlToInlineData(likedUrl, signal);
     if (inline) references.push(inline);
   }
 
@@ -676,9 +769,9 @@ async function generateOpenRouterFusedCover(
 
   onProgress?.({ done: 0, total: settings.batchSize, phase: 'preparing' });
   const compositionPlan = baseImage ? null : await planFusionComposition(sources, settings, undefined, signal);
-  const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
-  const normalizedReference = reference ? await normalizeImageSource(reference) : null;
-  const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
+  const normalizedSources = await Promise.all(sources.map((source) => normalizeImageSource(source, signal)));
+  const normalizedReference = reference ? await normalizeImageSource(reference, signal) : null;
+  const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage, signal) : null;
   let references: OpenRouterImageReference[] = normalizedSources.map(({ data, mimeType }) => ({
     data,
     mimeType: mimeType as OpenRouterImageReference['mimeType'],
@@ -698,7 +791,7 @@ async function generateOpenRouterFusedCover(
   } else {
     for (const likedUrl of likedImages) {
       if (references.length >= model.maxReferences) break;
-      const inline = await likedUrlToInlineData(likedUrl);
+      const inline = await likedUrlToInlineData(likedUrl, signal);
       if (inline) references.push(inline as OpenRouterImageReference);
     }
     // OpenRouter enforces 10 MiB per image and 24 MiB combined. Reuse the
@@ -744,6 +837,262 @@ async function generateOpenRouterFusedCover(
   return results;
 }
 
+function backgroundPlatePrompt(
+  settings: GenerationSettings,
+  plan: CompositionPlan,
+  hasReference: boolean,
+  referenceCompositionNotes: string | null,
+  variant: number,
+) {
+  const reservedRegions = [...plan.selected.placements]
+    .sort((a, b) => a.sourceIndex - b.sourceIndex)
+    .map((placement) => {
+      const [x, y, width, height] = placement.box.map((value) => Math.round(value * 100));
+      return `- Region ${placement.sourceIndex + 1}: x ${x}%, y ${y}%, width ${width}%, height ${height}%; depth ${Math.round(placement.depth * 100)}%; layer ${placement.zIndex}.`;
+    })
+    .join('\n');
+  return `BACKGROUND PLATE ONLY — this image will receive protected source-art layers later.
+Create one complete, coherent environment. Fill the whole frame with purposeful scenery, foreground details, depth, atmosphere, and a readable ground plane; do not leave a flat or empty central void.
+Absolutely no characters, people, creatures, bodies, faces, limbs, armor, portraits, statues, silhouettes, or humanoid shadows. Do not paint placeholders inside the reserved subject regions.
+Keep the planned subject regions visually unoccupied while continuing the environment naturally behind them. Establish one horizon, one camera, and one shared lighting direction so later subject layers feel grounded.
+TARGET ASPECT RATIO: ${settings.aspectRatio}.
+CAMERA: ${plan.selected.camera}; HORIZON: ${Math.round(plan.selected.horizon * 100)}%.
+RESERVED REGIONS (coordinates only; do not draw occupants):
+${reservedRegions}
+ENVIRONMENT REQUEST: ${settings.prompt.trim() || 'A cinematic fantasy environment suitable for a commercial cover.'}
+${settings.negativePrompt?.trim() ? `ALSO AVOID: ${settings.negativePrompt.trim()}.` : ''}
+${hasReference ? 'The attached image is a spatial composition reference only. Copy neither its characters nor its text, logos, or protected artwork.' : ''}
+${referenceCompositionNotes?.trim() ? `SPATIAL NOTES: ${referenceCompositionNotes.trim()}` : ''}
+VARIANT ${variant}: vary only environmental rhythm, camera distance, and atmospheric depth.`;
+}
+
+function validateExactArtProvider(
+  settings: GenerationSettings,
+  reference: ImageSource | null,
+) {
+  if (!isOpenRouterImageModel(settings.model)) return;
+  const model = getOpenRouterModel(settings.model);
+  if (!model || !model.coverCompatible) {
+    throw new Error('Эта модель OpenRouter пока несовместима с редактором Cover.');
+  }
+  if (model.aspectRatios.length > 0 && !(model.aspectRatios as readonly string[]).includes(settings.aspectRatio)) {
+    throw new Error(`${model.name} не поддерживает выбранный формат.`);
+  }
+  if (model.resolutions.length > 0 && !(model.resolutions as readonly string[]).includes(settings.imageSize)) {
+    throw new Error(`${model.name} не поддерживает выбранное разрешение.`);
+  }
+  if (settings.model === 'recraft/recraft-v4-styles-pro' && !reference) {
+    throw new Error('Для защищённой композиции Recraft V4 нужен референс композиции.');
+  }
+}
+
+async function prepareExactArtReference(
+  settings: GenerationSettings,
+  reference: ImageSource | null,
+  signal?: AbortSignal,
+): Promise<ImageSource | null> {
+  if (!reference) return null;
+  if (isOpenRouterImageModel(settings.model)) {
+    const model = getOpenRouterModel(settings.model);
+    if (!model) throw new Error('Эта модель OpenRouter пока несовместима с редактором Cover.');
+    if (model.referenceStrategy === 'contact-sheet') {
+      return composeOpenRouterReferenceSheet([{
+        label: 'COMPOSITION',
+        reference: reference as OpenRouterImageReference,
+      }], signal, { maxBytes: model.maxReferenceBytes });
+    }
+  }
+  const [prepared] = await prepareImageReferences([reference], signal);
+  return prepared;
+}
+
+async function generateBackgroundPlates(
+  settings: GenerationSettings,
+  plan: CompositionPlan,
+  reference: ImageSource | null,
+  referenceCompositionNotes: string | null,
+  signal?: AbortSignal,
+  onBackgroundComplete?: (background: string, index: number) => Promise<string>,
+): Promise<Array<{ background: string; completedResult?: string }>> {
+  const prompts = Array.from({ length: settings.batchSize }, (_, index) =>
+    backgroundPlatePrompt(settings, plan, Boolean(reference), referenceCompositionNotes, index + 1));
+
+  if (settings.model === CHATGPT_IMAGE_MODEL) {
+    const generate = await createChatGPTImageGenerator(reference ? [reference] : [], signal);
+    const results: Array<{ background: string; completedResult?: string }> = [];
+    for (let index = 0; index < prompts.length; index += 1) {
+      signal?.throwIfAborted();
+      const background = await generate(prompts[index]);
+      const completedResult = onBackgroundComplete
+        ? await onBackgroundComplete(background, index)
+        : undefined;
+      results.push({ background, completedResult });
+    }
+    return results;
+  }
+
+  if (isOpenRouterImageModel(settings.model)) {
+    validateExactArtProvider(settings, reference);
+    const model = getOpenRouterModel(settings.model);
+    if (!model) throw new Error('Эта модель OpenRouter пока несовместима с редактором Cover.');
+    const references = reference ? [reference as OpenRouterImageReference] : [];
+    const results: Array<{ background: string; completedResult?: string }> = [];
+    for (let index = 0; index < prompts.length; index += 1) {
+      signal?.throwIfAborted();
+      let completedResult: string | undefined;
+      const background = await generateOpenRouterImage({
+        model: settings.model,
+        prompt: prompts[index],
+        references,
+        ...(model.aspectRatios.length > 0 ? { aspectRatio: settings.aspectRatio } : {}),
+        ...(model.resolutions.length > 0 && settings.imageSize !== '512px'
+          ? { resolution: settings.imageSize }
+          : {}),
+      }, signal, onBackgroundComplete ? {
+        onResult: async (imageUrl) => {
+          completedResult = await onBackgroundComplete(imageUrl, index);
+        },
+      } : {});
+      results.push({ background, completedResult });
+    }
+    return results;
+  }
+
+  const normalizedSettings = {
+    ...settings,
+    ...normalizeGeminiImageSettings(settings.model, settings.imageSize, settings.aspectRatio),
+  } as GenerationSettings;
+  const ai = await createGeminiClient();
+  const results: Array<{ background: string; completedResult?: string }> = [];
+  for (let index = 0; index < prompts.length; index += 1) {
+    signal?.throwIfAborted();
+    const parts: any[] = [{ text: prompts[index] }];
+    if (reference) {
+      parts.push({
+        inlineData: {
+          data: reference.data,
+          mimeType: reference.mimeType,
+        },
+      });
+    }
+    const imageConfig: any = { aspectRatio: normalizedSettings.aspectRatio };
+    if (MODELS_SUPPORTING_IMAGE_SIZE.has(normalizedSettings.model)) {
+      imageConfig.imageSize = normalizedSettings.imageSize;
+    }
+    const response = await ai.models.generateContent({
+      model: normalizedSettings.model,
+      contents: { parts },
+      config: {
+        imageConfig,
+        ...(signal ? { abortSignal: signal } : {}),
+      },
+    });
+    signal?.throwIfAborted();
+    const image = response.candidates?.[0]?.content?.parts
+      ?.find((part: any) => part.inlineData)?.inlineData;
+    if (!image?.data || !image?.mimeType) {
+      throw new Error('Модель не создала фон для защищённой композиции.');
+    }
+    const background = `data:${image.mimeType};base64,${image.data}`;
+    const completedResult = onBackgroundComplete
+      ? await onBackgroundComplete(background, index)
+      : undefined;
+    results.push({ background, completedResult });
+  }
+  return results;
+}
+
+async function generateExactArtFusedCover(
+  sources: FusionSource[],
+  reference: ImageSource | null,
+  settings: GenerationSettings,
+  referenceCompositionNotes: string | null,
+  onProgress?: (p: CoverGenerationProgress) => void,
+  signal?: AbortSignal,
+  onResult?: CoverGenerationResultHandler,
+): Promise<string[]> {
+  if (!Number.isInteger(settings.batchSize) || settings.batchSize < 1 || settings.batchSize > 4) {
+    throw new Error('Доступен пакет от 1 до 4 вариантов.');
+  }
+  validateExactArtProvider(settings, reference);
+  const runSignal = signal ?? new AbortController().signal;
+  runSignal.throwIfAborted();
+  onProgress?.({ done: 0, total: settings.batchSize, phase: 'preparing' });
+
+  const normalizedSources = await Promise.all(sources.map((source) => normalizeImageSource(source, runSignal)));
+  const plannerSources: FusionSource[] = normalizedSources.map((source, index) => ({
+    ...source,
+    role: sources[index].role,
+  }));
+  for (const source of normalizedSources) {
+    const dataUrl = `data:${source.mimeType};base64,${source.data}`;
+    if (!preflightExactArtRaster(dataUrl)) {
+      throw new Error('Для точной композиции поддерживаются только PNG, JPG и WEBP.');
+    }
+    await validateExactArtRaster(dataUrl, runSignal);
+  }
+  const normalizedReference = reference ? await normalizeImageSource(reference, runSignal) : null;
+  if (normalizedReference) {
+    const referenceDataUrl = `data:${normalizedReference.mimeType};base64,${normalizedReference.data}`;
+    if (!preflightExactArtRaster(referenceDataUrl)) {
+      throw new Error('Для точной композиции поддерживаются только PNG, JPG и WEBP.');
+    }
+    await validateExactArtRaster(referenceDataUrl, runSignal);
+  }
+  // Finish every deterministic provider/reference check before the first
+  // billable BRIA mask request. Invalid GIF/SVG/oversized references must fail
+  // locally without spending on subject extraction.
+  const preparedReference = await prepareExactArtReference(settings, normalizedReference, runSignal);
+  const maskInputs: ImageSource[] = [];
+  for (const source of normalizedSources) {
+    const [prepared] = await prepareImageReferences([source], runSignal);
+    maskInputs.push(prepared);
+  }
+  const [compositionPlan, layers] = await Promise.all([
+    planFusionComposition(plannerSources, settings, undefined, runSignal),
+    prepareSubjectLayers(maskInputs, runSignal, { concurrency: 2 }),
+  ]);
+
+  runSignal.throwIfAborted();
+  onProgress?.({ done: 0, total: settings.batchSize, phase: 'generating' });
+  let finalizing = false;
+  const beginFinalizing = () => {
+    if (finalizing) return;
+    finalizing = true;
+    onProgress?.({ done: 0, total: settings.batchSize, phase: 'finalizing' });
+  };
+  const compose = async (background: string, index: number) => {
+    beginFinalizing();
+    const result = await compositeExactArtScene({
+      background,
+      sources: normalizedSources,
+      layers,
+      plan: compositionPlan,
+      signal: runSignal,
+    });
+    await onResult?.(result);
+    onProgress?.({ done: index + 1, total: settings.batchSize, phase: 'finalizing' });
+    return result;
+  };
+  const backgrounds = await generateBackgroundPlates(
+    settings,
+    compositionPlan,
+    preparedReference,
+    referenceCompositionNotes,
+    runSignal,
+    compose,
+  );
+
+  runSignal.throwIfAborted();
+  const results: string[] = [];
+  for (const item of backgrounds) {
+    // Every provider normally composes and publishes each completed background
+    // before starting the next variant. The fallback protects adapter drift.
+    results.push(item.completedResult ?? await compose(item.background, results.length));
+  }
+  return results;
+}
+
 export async function generateFusedCover(
   sources: FusionSource[],
   reference: ImageSource | null,
@@ -755,6 +1104,17 @@ export async function generateFusedCover(
   signal?: AbortSignal,
   onResult?: CoverGenerationResultHandler,
 ): Promise<string[]> {
+  if (settings.preserveExactArt && !baseImage) {
+    return generateExactArtFusedCover(
+      sources,
+      reference,
+      settings,
+      referenceCompositionNotes,
+      onProgress,
+      signal,
+      onResult,
+    );
+  }
   if (settings.model === CHATGPT_IMAGE_MODEL) {
     return generateChatGPTFusedCover(sources, reference, settings, baseImage, likedImages, referenceCompositionNotes, onProgress, signal);
   }
@@ -767,7 +1127,7 @@ export async function generateFusedCover(
   } as GenerationSettings;
   const ai = await createGeminiClient();
   const model = settings.model;
-  const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
+  const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage, signal) : null;
 
   onProgress?.({
     done: 0,
@@ -831,7 +1191,7 @@ export async function generateFusedCover(
     const recentLikes = likedImages.slice(0, optionalReferenceLimit);
     for (const likedUrl of recentLikes) {
       try {
-        const inline = await likedUrlToInlineData(likedUrl);
+        const inline = await likedUrlToInlineData(likedUrl, signal);
         if (inline) likedInlineData.push(inline);
       } catch (e) {
         console.error("Failed to parse liked image", e);
@@ -1005,10 +1365,15 @@ export async function generateFusedCover(
  * Normalize an ImageSource to base64 inlineData.
  * Handles both data URLs and http(s) public URLs from server storage.
  */
-export async function normalizeImageSource(image: ImageSource): Promise<{ data: string; mimeType: string }> {
+export async function normalizeImageSource(
+  image: ImageSource,
+  signal?: AbortSignal,
+): Promise<{ data: string; mimeType: string }> {
+  throwIfImageHydrationAborted(signal);
   if (image.data.startsWith("/") || image.data.startsWith("http://") || image.data.startsWith("https://")) {
-    const inline = await likedUrlToInlineData(image.data);
+    const inline = await likedUrlToInlineData(image.data, signal);
     if (!inline) throw new Error(`Failed to fetch image from URL: ${image.data}`);
+    throwIfImageHydrationAborted(signal);
     return inline;
   }
   return { data: image.data.split(",")[1] || image.data, mimeType: image.mimeType };
