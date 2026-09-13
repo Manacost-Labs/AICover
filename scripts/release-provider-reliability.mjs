@@ -262,7 +262,10 @@ async function restorePreviousAssets(saved, app, manifest) {
   }
 }
 
-export async function rollback({ saved = BACKUP, app = APP, targets = liveTargets, hooks = async () => {} } = {}) {
+export async function rollback({ saved = BACKUP, app, targets = liveTargets, hooks = async () => {} } = {}) {
+  const usesLiveTargets = Object.keys(liveTargets).every((key) => targets[key] === liveTargets[key]);
+  assert(app || usesLiveTargets, 'Custom rollback targets require an explicit app path');
+  const rollbackApp = app || APP;
   const manifest = await validateArchive(saved);
   const restoreOrder = ['models', 'openrouter', 'server', 'index'].filter((key) => manifest.files[key]);
   for (const key of restoreOrder) {
@@ -272,8 +275,8 @@ export async function rollback({ saved = BACKUP, app = APP, targets = liveTarget
       await atomic(targets[key], await fs.readFile(`${saved}/previous/${key}`), descriptor.candidate, descriptor.owner);
     }
   }
-  await restorePreviousAssets(saved, app, manifest);
-  assert.deepEqual(await inventory(`${app}/dist`), manifest.previousDist, 'Previous dist was not fully restored');
+  await restorePreviousAssets(saved, rollbackApp, manifest);
+  assert.deepEqual(await inventory(`${rollbackApp}/dist`), manifest.previousDist, 'Previous dist was not fully restored');
   await hooks('restore');
   return { rolledBack: true, restoredIndex: manifest.files.index.previous };
 }
@@ -424,7 +427,7 @@ export async function rehearse(saved = BACKUP) {
   }
   await publish({ saved: archive, app, targets });
   for (const [key, descriptor] of Object.entries(manifest.files)) assert.equal(await hash(targets[key]), descriptor.candidate);
-  await rollback({ saved: archive, targets });
+  await rollback({ saved: archive, app, targets });
   for (const [key, descriptor] of Object.entries(manifest.files)) assert.equal(await hash(targets[key]), descriptor.previous);
   return { rehearsal: root, publishRollback: 'passed', productionTouched: false };
 }

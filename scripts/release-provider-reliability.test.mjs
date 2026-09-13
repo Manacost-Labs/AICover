@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { hash, inventory } from './release-openrouter.mjs';
-import { buildReviewedCandidate, publish, rollback, validateArchive } from './release-provider-reliability.mjs';
+import { buildReviewedCandidate, publish, rehearse, rollback, validateArchive } from './release-provider-reliability.mjs';
 
 const TEST_COMMIT = 'a'.repeat(40);
 process.env.COVER_RELEASE_COMMIT = TEST_COMMIT;
@@ -116,6 +116,18 @@ test('publishes backend before the index and restores the exact baseline', async
   assert.equal(await fs.readFile(`${release.app}/dist/fonts/license.txt`, 'utf8'), 'old-license');
   await assert.rejects(fs.lstat(`${release.app}/dist/assets/new.js`), (error) => error.code === 'ENOENT');
   assert.deepEqual(await inventory(`${release.app}/dist`), release.manifest.previousDist);
+});
+
+test('rehearsal restores its sandbox exactly and custom rollback cannot fall through to production', async () => {
+  const release = await fixture();
+  await assert.rejects(
+    rollback({ saved: release.saved, targets: release.targets }),
+    /explicit app path/,
+  );
+
+  const outcome = await rehearse(release.saved);
+  assert.notEqual(outcome.rehearsal, release.app);
+  assert.deepEqual(await inventory(`${outcome.rehearsal}/app/dist`), release.manifest.previousDist);
 });
 
 test('a failed live preflight does not add assets or mutate a target', async () => {
