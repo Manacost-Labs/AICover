@@ -66,3 +66,6 @@ Provider metadata is captured before activation; rollback health checks remain
 independent of third-party metadata availability.
 The existing production `package.json` and `package-lock.json` are guarded as a
 pair and left untouched because this release changes no runtime dependency.
+Stable asset paths are atomically replaced when their content changes; rollback
+restores them and removes candidate-only files, so `dist` returns to its exact
+captured inventory after any failed activation.

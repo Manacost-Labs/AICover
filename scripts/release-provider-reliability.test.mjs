@@ -45,8 +45,11 @@ async function fixture() {
   await put(`${app}/dist/assets/old.js`, 'old');
   await put(`${saved}/previous-dist/index.html`, 'previous-index');
   await put(`${saved}/previous-dist/assets/old.js`, 'old');
+  await put(`${app}/dist/fonts/license.txt`, 'old-license');
+  await put(`${saved}/previous-dist/fonts/license.txt`, 'old-license');
   await put(`${saved}/candidate-dist/index.html`, 'candidate-index');
   await put(`${saved}/candidate-dist/assets/new.js`, 'new');
+  await put(`${saved}/candidate-dist/fonts/license.txt`, 'new-license');
   await put(`${saved}/support/evidence`, 'verified');
   await put(`${saved}/support/package-lock.json`, 'test-lock');
   manifest.previousDist = await inventory(`${saved}/previous-dist`);
@@ -106,8 +109,13 @@ test('publishes backend before the index and restores the exact baseline', async
   await publish({ ...release, hooks: async (stage) => events.push(stage) });
   assert(events.indexOf('backend') < events.indexOf('index'));
   for (const [key, descriptor] of Object.entries(release.manifest.files)) assert.equal(await hash(release.targets[key]), descriptor.candidate);
+  assert.equal(await fs.readFile(`${release.app}/dist/fonts/license.txt`, 'utf8'), 'new-license');
+  assert.equal(await fs.readFile(`${release.app}/dist/assets/new.js`, 'utf8'), 'new');
   await rollback(release);
   for (const [key, descriptor] of Object.entries(release.manifest.files)) assert.equal(await hash(release.targets[key]), descriptor.previous);
+  assert.equal(await fs.readFile(`${release.app}/dist/fonts/license.txt`, 'utf8'), 'old-license');
+  await assert.rejects(fs.lstat(`${release.app}/dist/assets/new.js`), (error) => error.code === 'ENOENT');
+  assert.deepEqual(await inventory(`${release.app}/dist`), release.manifest.previousDist);
 });
 
 test('a failed live preflight does not add assets or mutate a target', async () => {

@@ -221,19 +221,18 @@ async function currentTargetHash(target, descriptor) {
 
 async function addCandidateAssets(saved, app, manifest) {
   const current = await inventory(`${app}/dist`);
-  for (const [relative, expected] of Object.entries(manifest.previousDist)) {
-    if (relative !== 'index.html') assert.equal(current[relative], expected, `Previous asset drift: ${relative}`);
-  }
+  assert.deepEqual(current, manifest.previousDist, 'Previous dist drift before asset activation');
   for (const [relative, expected] of Object.entries(manifest.candidateDist)) {
     if (relative === 'index.html') continue;
     const target = `${app}/dist/${relative}`;
     const source = `${saved}/candidate-dist/${relative}`;
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o755 });
-    try {
-      await regular(target);
-      assert.equal(await hash(target), expected, `Asset collision: ${relative}`);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
+    const previous = manifest.previousDist[relative];
+    if (previous) {
+      if (previous === expected) continue;
+      const metadata = await owner(target);
+      await atomic(target, await fs.readFile(source), previous, metadata);
+    } else {
       await fs.copyFile(source, target, constants.COPYFILE_EXCL);
       await fs.chown(target, manifest.files.index.owner.uid, manifest.files.index.owner.gid);
       await fs.chmod(target, 0o644);
@@ -241,14 +240,40 @@ async function addCandidateAssets(saved, app, manifest) {
   }
 }
 
-export async function rollback({ saved = BACKUP, targets = liveTargets, hooks = async () => {} } = {}) {
+async function restorePreviousAssets(saved, app, manifest) {
+  const current = await inventory(`${app}/dist`);
+  const relatives = new Set([...Object.keys(manifest.previousDist), ...Object.keys(manifest.candidateDist)]);
+  relatives.delete('index.html');
+  for (const relative of relatives) {
+    const target = `${app}/dist/${relative}`;
+    const previous = manifest.previousDist[relative];
+    const candidate = manifest.candidateDist[relative];
+    const active = current[relative];
+    if (previous) {
+      assert(active === previous || active === candidate, `Asset rollback drift: ${relative}`);
+      if (active === candidate && candidate !== previous) {
+        const metadata = await owner(target);
+        await atomic(target, await fs.readFile(`${saved}/previous-dist/${relative}`), candidate, metadata);
+      }
+    } else if (active != null) {
+      assert.equal(active, candidate, `New asset rollback drift: ${relative}`);
+      await fs.unlink(target);
+    }
+  }
+}
+
+export async function rollback({ saved = BACKUP, app = APP, targets = liveTargets, hooks = async () => {} } = {}) {
   const manifest = await validateArchive(saved);
-  for (const [key, descriptor] of Object.entries(manifest.files)) {
+  const restoreOrder = ['models', 'openrouter', 'server', 'index'].filter((key) => manifest.files[key]);
+  for (const key of restoreOrder) {
+    const descriptor = manifest.files[key];
     const current = await currentTargetHash(targets[key], descriptor);
     if (current !== descriptor.previous) {
       await atomic(targets[key], await fs.readFile(`${saved}/previous/${key}`), descriptor.candidate, descriptor.owner);
     }
   }
+  await restorePreviousAssets(saved, app, manifest);
+  assert.deepEqual(await inventory(`${app}/dist`), manifest.previousDist, 'Previous dist was not fully restored');
   await hooks('restore');
   return { rolledBack: true, restoredIndex: manifest.files.index.previous };
 }
@@ -266,11 +291,11 @@ export async function publish({
   for (const [key, descriptor] of Object.entries(manifest.files)) {
     assert.equal(await currentTargetHash(targets[key], descriptor), descriptor.previous, `Preflight drift: ${key}`);
   }
-  await addCandidateAssets(saved, app, manifest);
   let mutated = false;
   try {
+    mutated = true;
+    await addCandidateAssets(saved, app, manifest);
     for (const key of ['models', 'openrouter', 'server']) {
-      mutated = true;
       const descriptor = manifest.files[key];
       await write(targets[key], await fs.readFile(`${saved}/candidate/${key}`), descriptor.previous, descriptor.owner);
       await hooks(`written:${key}`);
@@ -282,7 +307,7 @@ export async function publish({
     await hooks('verify');
     return { deployed: true, candidateIndex: index.candidate, backup: saved };
   } catch (error) {
-    if (mutated) await rollback({ saved, targets, hooks });
+    if (mutated) await rollback({ saved, app, targets, hooks });
     throw new Error(`Activation failed; previous release restored (${error.code || error.name}).`);
   }
 }
