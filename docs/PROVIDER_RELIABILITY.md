@@ -64,3 +64,5 @@ records Node/npm/lockfile provenance and rechecks HEAD after the build. The same
 SHA pin is required again for rehearsal, deployment, verification, and rollback.
 Provider metadata is captured before activation; rollback health checks remain
 independent of third-party metadata availability.
+The existing production `package.json` and `package-lock.json` are guarded as a
+pair and left untouched because this release changes no runtime dependency.

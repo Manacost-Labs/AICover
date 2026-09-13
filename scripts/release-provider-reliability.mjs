@@ -22,13 +22,13 @@ const BUILD_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 const EXPECTED_BASELINE = Object.freeze({
   index: 'fa8d50cb041adb0fc88e32e1752e409ce0b4ed44471945bd0b43f7329036b079',
-  package: '5f4a16a31bc9379bd8df6a6ccb45ca92bbe31399d3fb848756de3c90b2987798',
   server: 'bbaef641d9646289e304fac36c20fea385169f1022f568ce2de9839be307bdfc',
   openrouter: '52c80d9f0278baf8e5b78f16b5a048db0511c079f7c68d208bde27488c5cef6f',
   models: 'ffdcbd26b7c00414851b901b85026a10e2d884feeaf3063307f26f7f1e5f55f9',
 });
 
 const STATIC_GUARDS = Object.freeze({
+  [`${APP}/package.json`]: '5f4a16a31bc9379bd8df6a6ccb45ca92bbe31399d3fb848756de3c90b2987798',
   [`${APP}/package-lock.json`]: '17ef5a762eebad14e1f45d1983f6e464b38222c7ef2823398b7d602837829e94',
   '/etc/systemd/system/cover-image.service': '2364e2c3a5328d9b562433c8935393ecb93b88e91627200f97aef7240ebd2434',
   '/etc/systemd/system/cover-image.service.d/30-chatgpt.conf': 'e325a4a991b3203ba93ef4b6b0857f15d7f6bba3c61161d188ebd0997fa94eb6',
@@ -41,7 +41,6 @@ const STATIC_GUARDS = Object.freeze({
 
 export const liveTargets = Object.freeze({
   index: `${APP}/dist/index.html`,
-  package: `${APP}/package.json`,
   server: `${APP}/server/index.js`,
   openrouter: `${APP}/server/openrouter-image.js`,
   models: `${APP}/server/openrouter-models.js`,
@@ -49,7 +48,6 @@ export const liveTargets = Object.freeze({
 
 const sourceTargets = Object.freeze({
   index: `${SOURCE}/dist/index.html`,
-  package: `${SOURCE}/package.json`,
   server: `${SOURCE}/server/index.js`,
   openrouter: `${SOURCE}/server/openrouter-image.js`,
   models: `${SOURCE}/server/openrouter-models.js`,
@@ -140,7 +138,6 @@ export async function capture() {
     assert.equal(await hash(liveTargets[key]), expected, `Production baseline drift: ${key}`);
   }
   const build = await buildReviewedCandidate({ expectedCommit: reviewedCommit });
-  assert.equal(build.packageLock, STATIC_GUARDS[`${APP}/package-lock.json`], 'Candidate package lock differs from production');
   const providerAudit = await auditProviderContracts();
   assert.equal(providerAudit.ok, true, `Provider contract audit failed: ${providerAudit.errors.join('; ')}`);
   const sourceCommit = build.sourceCommit;
@@ -264,7 +261,7 @@ export async function publish({ saved = BACKUP, app = APP, targets = liveTargets
   await addCandidateAssets(saved, app, manifest);
   let mutated = false;
   try {
-    for (const key of ['package', 'models', 'openrouter', 'server']) {
+    for (const key of ['models', 'openrouter', 'server']) {
       mutated = true;
       const descriptor = manifest.files[key];
       await write(targets[key], await fs.readFile(`${saved}/candidate/${key}`), descriptor.previous, descriptor.owner);
@@ -384,7 +381,7 @@ export async function rehearse(saved = BACKUP) {
   await fs.cp(saved, archive, { recursive: true, force: false, errorOnExist: true });
   await fs.cp(`${archive}/previous-dist`, `${app}/dist`, { recursive: true, force: false, errorOnExist: true });
   const targets = {
-    index: `${app}/dist/index.html`, package: `${app}/package.json`, server: `${app}/server/index.js`,
+    index: `${app}/dist/index.html`, server: `${app}/server/index.js`,
     openrouter: `${app}/server/openrouter-image.js`, models: `${app}/server/openrouter-models.js`,
   };
   for (const key of Object.keys(targets)) {

@@ -22,7 +22,7 @@ async function fixture() {
   const saved = `${root}/backup`;
   const app = `${root}/app`;
   const targets = {
-    index: `${app}/dist/index.html`, package: `${app}/package.json`, server: `${app}/server/index.js`,
+    index: `${app}/dist/index.html`, server: `${app}/server/index.js`,
     openrouter: `${app}/server/openrouter-image.js`, models: `${app}/server/openrouter-models.js`,
   };
   const manifest = {
@@ -110,7 +110,7 @@ test('publishes backend before the index and restores the exact baseline', async
   for (const [key, descriptor] of Object.entries(release.manifest.files)) assert.equal(await hash(release.targets[key]), descriptor.previous);
 });
 
-for (const failure of ['written:package', 'written:models', 'written:openrouter', 'written:server', 'backend', 'index', 'verify']) {
+for (const failure of ['written:models', 'written:openrouter', 'written:server', 'backend', 'index', 'verify']) {
   test(`failure at ${failure} restores the previous release`, async () => {
     const release = await fixture();
     await assert.rejects(publish({ ...release, hooks: async (stage) => {
