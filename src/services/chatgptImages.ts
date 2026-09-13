@@ -325,7 +325,7 @@ function allocateTargetBytes(sizes: number[]): number[] {
   return targets;
 }
 
-async function prepareReferences(
+export async function prepareImageReferences(
   references: ChatGPTImageReference[],
   signal?: AbortSignal,
 ): Promise<ChatGPTImageReference[]> {
@@ -450,7 +450,7 @@ export async function createChatGPTImageGenerator(
   if (references.length > MAX_CHATGPT_IMAGE_REFERENCES) {
     throw new ChatGPTImageError(`Можно передать не больше ${MAX_CHATGPT_IMAGE_REFERENCES} изображений.`);
   }
-  const preparedReferences = await prepareReferences(references, signal);
+  const preparedReferences = await prepareImageReferences(references, signal);
   throwIfAborted(signal);
   return prompt => sendChatGPTImage(prompt, preparedReferences, signal);
 }

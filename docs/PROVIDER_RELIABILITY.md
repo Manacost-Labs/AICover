@@ -44,6 +44,15 @@ real user-connected browser session and must remain a manual canary.
 See [OPENROUTER_IMAGES.md](./OPENROUTER_IMAGES.md) for the per-model matrix,
 reference packaging, bounded retry policy, and drift verifier.
 
+Before an individual-reference request, Cover checks both provider budgets:
+10 MiB per source and 24 MiB combined. Oversized PNG/JPEG/WEBP inputs up to the
+bounded 32 MiB local source limit are proportionally resized and iteratively
+encoded as WEBP in the browser. Only this temporary request copy changes; the
+original upload in the editor, history, and service storage is untouched.
+Contact-sheet providers keep their separate 3/10 MiB composed-image budgets.
+If an input cannot be decoded or fitted, Cover stops before starting a paid job
+instead of dropping a reference or silently switching models.
+
 ## Release gate
 
 Before production:

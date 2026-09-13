@@ -5,6 +5,20 @@ import { normalizeGeminiImageSettings, supportsGeminiAspectRatio, supportsGemini
 
 const gemini = vi.hoisted(() => ({ generateContent: vi.fn() }));
 
+function base64OfByteLength(byteLength: number): string {
+  const padding = (3 - (byteLength % 3)) % 3;
+  return `${'A'.repeat(Math.ceil(byteLength / 3) * 4 - padding)}${'='.repeat(padding)}`;
+}
+
+function jpegBase64OfByteLength(byteLength: number, width = 12_000, height = 8_000): string {
+  const header = Uint8Array.from([
+    0xff, 0xd8, 0xff, 0xc0, 0x00, 0x08, 0x08,
+    (height >>> 8) & 0xff, height & 0xff,
+    (width >>> 8) & 0xff, width & 0xff, 0x00,
+  ]);
+  return `${btoa(String.fromCharCode(...header))}${base64OfByteLength(byteLength - header.length)}`;
+}
+
 vi.mock('./geminiClient', () => ({
   createGeminiClient: async () => ({ models: { generateContent: gemini.generateContent } }),
 }));
@@ -98,7 +112,50 @@ describe('server-storage image sources', () => {
 });
 
 describe('OpenRouter cover generation routing', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('optimizes an uploaded source over 10 MiB before starting a Seedream job', async () => {
+    const oversized = jpegBase64OfByteLength(10 * 1024 * 1024 + 1);
+    const optimizedBytes = Uint8Array.from([82, 73, 70, 70, 0, 0, 0, 0, 87, 69, 66, 80]);
+    const drawImage = vi.fn();
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn().mockReturnValue({ drawImage }),
+      toBlob: vi.fn((callback: BlobCallback) => callback(new Blob([optimizedBytes], { type: 'image/webp' }))),
+    } as unknown as HTMLCanvasElement;
+    const createElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => (
+      tagName === 'canvas' ? canvas : createElement(tagName)
+    ));
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 4_096, height: 2_731, close }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ jobId: '9f8483e6-cb34-40fe-8a5c-73c4bc6beff7', status: 'pending' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'complete', imageUrl: 'data:image/png;base64,iVBORw0KGgo=' })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateFusedCover([
+      { data: `data:image/jpeg;base64,${oversized}`, mimeType: 'image/jpeg', role: 'left' },
+    ], null, {
+      model: 'bytedance-seed/seedream-5-0-pro',
+      aspectRatio: '16:9',
+      imageSize: '1K',
+      prompt: 'Preserve the uploaded hero',
+      batchSize: 1,
+    })).resolves.toEqual(['data:image/png;base64,iVBORw0KGgo=']);
+
+    const start = fetchMock.mock.calls.find(([url]) => url === '/api/thumbnail/openrouter-generate');
+    const body = JSON.parse(String(start?.[1]?.body));
+    expect(body.references[0].mimeType).toBe('image/webp');
+    expect(body.references[0].data).toBe('UklGRgAAAABXRUJQ');
+    expect(drawImage).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
 
   it('routes the selected allowlisted model through one same-origin paid job', async () => {
     const fetchMock = vi.fn()

@@ -1,6 +1,6 @@
 import type { GoogleGenAI } from "@google/genai";
 import { MODELS_SUPPORTING_IMAGE_SIZE, normalizeGeminiImageSettings } from "../constants";
-import { CHATGPT_IMAGE_MODEL, MAX_CHATGPT_IMAGE_REFERENCES, createChatGPTImageGenerator, type ChatGPTImageReference } from "./chatgptImages";
+import { CHATGPT_IMAGE_MODEL, MAX_CHATGPT_IMAGE_REFERENCES, createChatGPTImageGenerator, prepareImageReferences, type ChatGPTImageReference } from "./chatgptImages";
 import { createGeminiClient } from "./geminiClient";
 import { generateOpenRouterImage, getOpenRouterModel, isOpenRouterImageModel, type OpenRouterImageReference } from "./openRouterImages";
 import { composeOpenRouterReferenceSheet } from "./openRouterReferenceComposer";
@@ -699,6 +699,10 @@ async function generateOpenRouterFusedCover(
       const inline = await likedUrlToInlineData(likedUrl);
       if (inline) references.push(inline as OpenRouterImageReference);
     }
+    // OpenRouter enforces 10 MiB per image and 24 MiB combined. Reuse the
+    // browser-side optimizer so only the request copy is resized; sources kept
+    // in the editor, history, and storage remain byte-for-byte unchanged.
+    references = await prepareImageReferences(references, signal) as OpenRouterImageReference[];
   }
 
   const optionalExampleCount = model.referenceStrategy === 'contact-sheet'
