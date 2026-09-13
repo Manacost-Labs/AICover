@@ -6,7 +6,10 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { hash, inventory } from './release-openrouter.mjs';
-import { publish, rollback, validateArchive } from './release-provider-reliability.mjs';
+import { buildReviewedCandidate, publish, rollback, validateArchive } from './release-provider-reliability.mjs';
+
+const TEST_COMMIT = 'a'.repeat(40);
+process.env.COVER_RELEASE_COMMIT = TEST_COMMIT;
 
 const digest = (data) => createHash('sha256').update(data).digest('hex');
 async function put(file, data) {
@@ -22,7 +25,12 @@ async function fixture() {
     index: `${app}/dist/index.html`, package: `${app}/package.json`, server: `${app}/server/index.js`,
     openrouter: `${app}/server/openrouter-image.js`, models: `${app}/server/openrouter-models.js`,
   };
-  const manifest = { files: {}, previousDist: {}, candidateDist: {}, support: {}, baselineRestarts: 0 };
+  const manifest = {
+    sourceCommit: TEST_COMMIT,
+    build: { sourceCommit: TEST_COMMIT, packageLock: digest('test-lock') },
+    providerAudit: { ok: true, errors: [] },
+    files: {}, previousDist: {}, candidateDist: {}, support: {}, baselineRestarts: 0,
+  };
   for (const [key, target] of Object.entries(targets)) {
     const previous = `previous-${key}`;
     const candidate = `candidate-${key}`;
@@ -40,12 +48,57 @@ async function fixture() {
   await put(`${saved}/candidate-dist/index.html`, 'candidate-index');
   await put(`${saved}/candidate-dist/assets/new.js`, 'new');
   await put(`${saved}/support/evidence`, 'verified');
+  await put(`${saved}/support/package-lock.json`, 'test-lock');
   manifest.previousDist = await inventory(`${saved}/previous-dist`);
   manifest.candidateDist = await inventory(`${saved}/candidate-dist`);
   manifest.support = await inventory(`${saved}/support`);
   await put(`${saved}/manifest.json`, JSON.stringify(manifest));
   return { saved, app, targets, manifest };
 }
+
+test('builds only the exact reviewed clean commit and rechecks it afterward', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cover-provider-build-test-'));
+  await put(`${root}/package-lock.json`, 'locked');
+  const calls = [];
+  const execImpl = (binary, args) => {
+    calls.push([binary, ...args]);
+    if (binary === 'git' && args[0] === 'status') return '';
+    if (binary === 'git' && args[0] === 'rev-parse') return `${TEST_COMMIT}\n`;
+    if (binary === '/usr/bin/npm' && args[0] === '--version') return '10.9.0\n';
+    if (binary === '/usr/bin/npm' && args[0] === 'run') return '';
+    throw new Error(`Unexpected command: ${binary}`);
+  };
+  const build = await buildReviewedCandidate({
+    source: root,
+    expectedCommit: TEST_COMMIT,
+    execImpl,
+    statImpl: async () => ({ uid: process.getuid(), gid: process.getgid() }),
+  });
+  assert.equal(build.sourceCommit, TEST_COMMIT);
+  assert.equal(build.npmVersion, '10.9.0');
+  assert.deepEqual(calls.filter(([binary]) => binary === '/usr/bin/npm'), [
+    ['/usr/bin/npm', '--version'],
+    ['/usr/bin/npm', 'run', 'build'],
+  ]);
+  assert.equal(calls.filter(([binary, command]) => binary === 'git' && command === 'rev-parse').length, 2);
+  assert.equal(calls.filter(([binary, command]) => binary === 'git' && command === 'status').length, 2);
+});
+
+test('rejects a clean commit that does not match the reviewed SHA before building', async () => {
+  let built = false;
+  await assert.rejects(buildReviewedCandidate({
+    source: '/candidate',
+    expectedCommit: TEST_COMMIT,
+    execImpl: (binary, args) => {
+      if (binary === 'git' && args[0] === 'status') return '';
+      if (binary === 'git' && args[0] === 'rev-parse') return `${'b'.repeat(40)}\n`;
+      if (binary === '/usr/bin/npm') built = true;
+      return '';
+    },
+    statImpl: async () => ({ uid: process.getuid(), gid: process.getgid() }),
+  }), /exact reviewed commit/);
+  assert.equal(built, false);
+});
 
 test('publishes backend before the index and restores the exact baseline', async () => {
   const release = await fixture();

@@ -142,7 +142,9 @@ export function ProviderModelPicker({
     logoSrc: openRouterModelLogos[model.id],
     description: model.description,
     disabled: !model.coverCompatible || availability[model.id] === 'unavailable',
-    disabledReason: availability[model.id] === 'unavailable'
+    disabledReason: !model.coverCompatible
+      ? 'Модель временно отключена: её endpoint ещё не подтверждён для Cover.'
+      : availability[model.id] === 'unavailable'
       ? 'У модели сейчас нет активного endpoint OpenRouter. Выберите другую модель.'
       : undefined,
   }));

@@ -25,6 +25,7 @@ export const OPENROUTER_IMAGE_MODELS = Object.freeze({
     background: 'opaque',
   }),
   'meta/muse-image': Object.freeze({
+    enabled: false,
     minReferences: 0,
     maxReferences: 1,
     aspectRatios: Object.freeze([]),
@@ -205,6 +206,9 @@ export function buildOpenRouterImageRequest(body) {
     throw validationError('Selected OpenRouter model is not available');
   }
   const profile = OPENROUTER_IMAGE_MODELS[model];
+  if (profile.enabled === false) {
+    throw validationError('Selected OpenRouter model is held until its endpoint contract is reviewed', 503, 'MODEL_UNAVAILABLE');
+  }
 
   const prompt = String(body?.prompt || '').trim();
   if (!prompt) throw validationError('Prompt is required');

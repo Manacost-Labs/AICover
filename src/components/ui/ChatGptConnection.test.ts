@@ -35,7 +35,7 @@ it('keeps the previous interface unchanged when the server feature is disabled',
   expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(1);
   expect(container.querySelector('.chatgpt-connection')).toBeNull();
 });
-it('adds the OpenRouter catalog, disables models without endpoints and gives providers real distinct icons', async () => {
+it('adds the OpenRouter catalog, holds models without reviewed endpoints and gives providers real distinct icons', async () => {
   await render(false, false, true);
   expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(11);
   expect(container.querySelector<HTMLInputElement>('input[value="x-ai/grok-imagine-image-2.0"]')!.disabled).toBe(false);
@@ -43,5 +43,15 @@ it('adds the OpenRouter catalog, disables models without endpoints and gives pro
   expect(container.querySelector<HTMLInputElement>('input[value="krea/krea-2-large"]')!.disabled).toBe(false);
   const logos = Array.from(container.querySelectorAll<HTMLImageElement>('.model-picker__logo img')).map(image => image.src);
   expect(new Set(logos).size).toBeGreaterThanOrEqual(8);
-  expect(container.textContent).toContain('нет активного endpoint');
+  expect(container.textContent).toContain('endpoint ещё не подтверждён');
+});
+
+it('keeps held models disabled before availability metadata arrives', async () => {
+  vi.stubGlobal('fetch', vi.fn((url: string) => String(url).includes('openrouter-models')
+    ? Promise.reject(new Error('catalog unavailable'))
+    : Promise.resolve(new Response(JSON.stringify({ enabled: false, connected: false, imageVerified: false })))));
+  await act(async () => root.render(React.createElement(ChatGptProvider, null, picker(true))));
+  expect(container.querySelector<HTMLInputElement>('input[value="meta/muse-image"]')!.disabled).toBe(true);
+  expect(container.querySelector<HTMLInputElement>('input[value="x-ai/grok-imagine-image-2.0"]')!.disabled).toBe(false);
+  expect(container.textContent).toContain('endpoint ещё не подтверждён');
 });

@@ -108,15 +108,12 @@ describe('OpenRouter image request boundary', () => {
     assert.equal(riverFast.background, 'opaque');
   });
 
-  it('accepts the single composed reference used by Muse and Krea', () => {
-    const muse = buildOpenRouterImageRequest({
+  it('holds Muse at the server trust boundary and accepts the Krea contact sheet', () => {
+    assert.throws(() => buildOpenRouterImageRequest({
       model: 'meta/muse-image',
       prompt: 'x',
       references: [{ mimeType: 'image/png', data: tinyPng }],
-    });
-    assert.equal(muse.input_references.length, 1);
-    assert.equal(Object.hasOwn(muse, 'aspect_ratio'), false);
-    assert.equal(Object.hasOwn(muse, 'resolution'), false);
+    }), (error) => error?.status === 503 && error?.code === 'MODEL_UNAVAILABLE');
 
     const krea = buildOpenRouterImageRequest({
       model: 'krea/krea-2-large',

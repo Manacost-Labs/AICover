@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { atomic, hash, inventory } from './release-openrouter.mjs';
+import { auditProviderContracts } from './verify-provider-contracts.mjs';
 
 export const SOURCE = '/srv/projects/web/AI-cover-worktrees/openrouter-images-20260912';
 export const APP = '/var/www/koloda/data/www/cover.hs-manacost.ru/repo';
@@ -16,6 +17,8 @@ const LOCK = '/run/lock/cover-foundation-release.lock';
 const SERVICE = 'cover-image.service';
 const SESSION_FILE = '/var/lib/cover-image/chatgpt/sessions.enc';
 const SESSION_DIR = '/var/lib/cover-image/chatgpt';
+const REVIEWED_COMMIT_ENV = 'COVER_RELEASE_COMMIT';
+const BUILD_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
 const EXPECTED_BASELINE = Object.freeze({
   index: 'fa8d50cb041adb0fc88e32e1752e409ce0b4ed44471945bd0b43f7329036b079',
@@ -86,16 +89,61 @@ async function assertStaticGuards() {
   }
 }
 
+export function expectedReviewedCommit(env = process.env) {
+  const value = String(env[REVIEWED_COMMIT_ENV] || '').trim();
+  assert.match(value, /^[0-9a-f]{40}$/, `${REVIEWED_COMMIT_ENV} must contain the exact reviewed commit SHA`);
+  return value;
+}
+
+export async function buildReviewedCandidate({
+  source = SOURCE,
+  expectedCommit = expectedReviewedCommit(),
+  execImpl = execFileSync,
+  statImpl = fs.stat,
+  hashImpl = hash,
+} = {}) {
+  const runGit = (args) => String(execImpl('git', args, { cwd: source, encoding: 'utf8' })).trim();
+  assert.equal(runGit(['status', '--porcelain']), '', 'Candidate worktree must be committed and clean');
+  const sourceCommit = runGit(['rev-parse', 'HEAD']);
+  assert.equal(sourceCommit, expectedCommit, 'Candidate HEAD is not the exact reviewed commit');
+
+  const sourceOwner = await statImpl(source);
+  const runOptions = {
+    cwd: source,
+    encoding: 'utf8',
+    stdio: 'pipe',
+    timeout: 180_000,
+    env: { PATH: BUILD_PATH, NODE_ENV: 'production', CI: '1' },
+    ...(process.getuid() === 0 ? { uid: sourceOwner.uid, gid: sourceOwner.gid } : {}),
+  };
+  const npmVersion = String(execImpl('/usr/bin/npm', ['--version'], runOptions)).trim();
+  execImpl('/usr/bin/npm', ['run', 'build'], runOptions);
+
+  assert.equal(runGit(['rev-parse', 'HEAD']), sourceCommit, 'Candidate HEAD changed during build');
+  assert.equal(runGit(['status', '--porcelain']), '', 'Candidate worktree changed during build');
+  return {
+    command: 'npm run build',
+    sourceCommit,
+    nodeVersion: process.version,
+    npmVersion,
+    packageLock: await hashImpl(`${source}/package-lock.json`),
+  };
+}
+
 export async function capture() {
   assert.equal(process.getuid(), 0, 'Capture requires root');
+  const reviewedCommit = expectedReviewedCommit();
   await assertStaticGuards();
   await assert.rejects(fs.lstat(BACKUP), (error) => error.code === 'ENOENT', 'Backup path already exists');
-  assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: SOURCE, encoding: 'utf8' }).trim(), '', 'Candidate worktree must be committed and clean');
-  const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: SOURCE, encoding: 'utf8' }).trim();
 
   for (const [key, expected] of Object.entries(EXPECTED_BASELINE)) {
     assert.equal(await hash(liveTargets[key]), expected, `Production baseline drift: ${key}`);
   }
+  const build = await buildReviewedCandidate({ expectedCommit: reviewedCommit });
+  assert.equal(build.packageLock, STATIC_GUARDS[`${APP}/package-lock.json`], 'Candidate package lock differs from production');
+  const providerAudit = await auditProviderContracts();
+  assert.equal(providerAudit.ok, true, `Provider contract audit failed: ${providerAudit.errors.join('; ')}`);
+  const sourceCommit = build.sourceCommit;
   for (const file of Object.values(sourceTargets)) await regular(file);
 
   await fs.mkdir(BACKUP, { mode: 0o700 });
@@ -120,6 +168,8 @@ export async function capture() {
     createdAt: new Date().toISOString(),
     source: SOURCE,
     sourceCommit,
+    build,
+    providerAudit,
     files,
     previousDist: await inventory(`${BACKUP}/previous-dist`),
     candidateDist: await inventory(`${BACKUP}/candidate-dist`),
@@ -134,6 +184,7 @@ export async function capture() {
     'docs/OPENROUTER_IMAGES.md', 'docs/PROVIDER_RELIABILITY.md',
     'scripts/release-provider-reliability.mjs', 'scripts/release-provider-reliability.test.mjs',
     'scripts/verify-provider-contracts.mjs', 'scripts/verify-provider-contracts.test.mjs',
+    'package-lock.json',
     'server/openrouter-image.test.js', 'server/openrouter-models.test.js',
     'src/services/geminiService.test.ts', 'src/services/openRouterImages.test.ts',
     'src/components/tabs/CreateTab.test.ts', 'src/components/tabs/ImageToolsTab.test.ts',
@@ -149,6 +200,10 @@ export async function capture() {
 
 export async function validateArchive(saved = BACKUP) {
   const manifest = await json(`${saved}/manifest.json`);
+  const reviewedCommit = expectedReviewedCommit();
+  assert.equal(manifest.sourceCommit, reviewedCommit, 'Archived candidate is not the exact reviewed commit');
+  assert.equal(manifest.build?.sourceCommit, reviewedCommit, 'Archived build provenance does not match reviewed commit');
+  assert.equal(manifest.providerAudit?.ok, true, 'Captured provider contract audit did not pass');
   for (const [key, descriptor] of Object.entries(manifest.files)) {
     assert.equal(await hash(`${saved}/previous/${key}`), descriptor.previous, `Previous archive drift: ${key}`);
     assert.equal(await hash(`${saved}/candidate/${key}`), descriptor.candidate, `Candidate archive drift: ${key}`);
@@ -156,6 +211,7 @@ export async function validateArchive(saved = BACKUP) {
   assert.deepEqual(await inventory(`${saved}/previous-dist`), manifest.previousDist, 'Previous dist archive drift');
   assert.deepEqual(await inventory(`${saved}/candidate-dist`), manifest.candidateDist, 'Candidate dist archive drift');
   assert.deepEqual(await inventory(`${saved}/support`), manifest.support, 'Support archive drift');
+  assert.equal(await hash(`${saved}/support/package-lock.json`), manifest.build?.packageLock, 'Archived build lockfile drift');
   return manifest;
 }
 
@@ -238,16 +294,6 @@ export async function checkLocal(expectedIndex, fetchImpl = globalThis.fetch) {
       const session = await (await get('http://127.0.0.1:3127/api/chatgpt/session')).json();
       assert.equal(session.enabled, true);
 
-      const catalog = (await (await get('http://127.0.0.1:3127/api/thumbnail/openrouter-models', 8_000)).json()).models;
-      assert.deepEqual(catalog.map((row) => row.id), MODEL_IDS);
-      for (const row of catalog) {
-        assert.equal(row.availability, row.id === 'meta/muse-image' ? 'unavailable' : 'available', `${row.id} availability`);
-      }
-      for (const id of GEMINI_IDS) {
-        const response = await get(`http://127.0.0.1:3127/api/gemini/v1beta/models/${id}`);
-        assert.equal(response.status, 200, `${id} metadata`);
-        assert.equal((await response.json()).supportedGenerationMethods.includes('generateContent'), true, `${id} generateContent`);
-      }
       const rejected = await fetchImpl('http://127.0.0.1:3127/api/thumbnail/openrouter-generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://cover.hs-manacost.ru' },
         body: JSON.stringify({ model: 'attacker/not-allowed', prompt: 'must not reach provider', references: [] }),
@@ -267,6 +313,22 @@ export async function checkLocal(expectedIndex, fetchImpl = globalThis.fetch) {
     }
   }
   throw lastError;
+}
+
+export async function checkProviderMetadata(fetchImpl = globalThis.fetch) {
+  const get = (url, timeout = 10_000) => fetchImpl(url, { signal: AbortSignal.timeout(timeout) });
+  const catalogResponse = await get('http://127.0.0.1:3127/api/thumbnail/openrouter-models');
+  assert.equal(catalogResponse.status, 200, 'OpenRouter catalog metadata');
+  const catalog = (await catalogResponse.json()).models;
+  assert.deepEqual(catalog.map((row) => row.id), MODEL_IDS);
+  for (const row of catalog) {
+    assert.equal(row.availability, row.id === 'meta/muse-image' ? 'unavailable' : 'available', `${row.id} availability`);
+  }
+  for (const id of GEMINI_IDS) {
+    const response = await get(`http://127.0.0.1:3127/api/gemini/v1beta/models/${id}`);
+    assert.equal(response.status, 200, `${id} metadata`);
+    assert.equal((await response.json()).supportedGenerationMethods.includes('generateContent'), true, `${id} generateContent`);
+  }
 }
 
 async function verifyPublicGate(fetchImpl = globalThis.fetch) {
@@ -339,7 +401,8 @@ export async function rehearse(saved = BACKUP) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const mode = process.argv[2];
-  assert(['capture', 'rehearse', 'deploy', 'verify', 'rollback'].includes(mode), 'Usage: release-provider-reliability.mjs capture|rehearse|deploy|verify|rollback');
+  assert(['capture', 'rehearse', 'deploy', 'verify', 'rollback'].includes(mode), `Usage: ${REVIEWED_COMMIT_ENV}=<reviewed-sha> release-provider-reliability.mjs capture|rehearse|deploy|verify|rollback`);
+  expectedReviewedCommit();
   assert.equal(process.getuid(), 0, 'Release commands require root');
   if (process.env.COVER_RELEASE_LOCK_HELD !== '1') {
     execFileSync('flock', ['-n', LOCK, 'env', 'COVER_RELEASE_LOCK_HELD=1', process.execPath, fileURLToPath(import.meta.url), mode], { stdio: 'inherit' });

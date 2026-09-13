@@ -3,6 +3,8 @@ import { pathToFileURL } from 'node:url';
 import { OPENROUTER_IMAGE_MODELS } from '../server/openrouter-image.js';
 
 const OPENROUTER_ENDPOINT_ROOT = 'https://openrouter.ai/api/v1/images/models';
+const MAX_CONTRACT_RESPONSE_BYTES = 256 * 1024;
+const CONTRACT_REQUEST_TIMEOUT_MS = 10_000;
 const EXPECTED_UNAVAILABLE_OPENROUTER_MODELS = new Set(['meta/muse-image']);
 const GEMINI_IMAGE_MODELS = [
   'gemini-2.5-flash-image',
@@ -24,6 +26,42 @@ function rangeContains(parameter, min, max) {
   return parameter?.type === 'range'
     && Number(parameter.min) <= min
     && Number(parameter.max) >= max;
+}
+
+async function readBoundedJson(response, maxBytes = MAX_CONTRACT_RESPONSE_BYTES) {
+  const declaredLength = Number(response.headers.get('content-length') || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel?.().catch(() => {});
+    throw new Error('response exceeds the contract-verifier byte limit');
+  }
+  if (!response.body?.getReader) throw new Error('response has no readable body');
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error('response exceeds the contract-verifier byte limit');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return JSON.parse(Buffer.concat(chunks, total).toString('utf8'));
+}
+
+async function fetchContract(fetchImpl, url) {
+  const response = await fetchImpl(url, {
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(CONTRACT_REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) return { response, payload: null };
+  return { response, payload: await readBoundedJson(response) };
 }
 
 function endpointSupportsProfile(endpoint, profile) {
@@ -55,10 +93,11 @@ export async function auditProviderContracts({
 
   for (const [modelId, profile] of Object.entries(OPENROUTER_IMAGE_MODELS)) {
     let response;
+    let payload;
     try {
-      response = await fetchImpl(endpointUrl(modelId), { headers: { Accept: 'application/json' } });
+      ({ response, payload } = await fetchContract(fetchImpl, endpointUrl(modelId)));
     } catch {
-      errors.push(`OpenRouter ${modelId}: endpoint catalog request failed`);
+      errors.push(`OpenRouter ${modelId}: endpoint catalog request or bounded parse failed`);
       openRouter.push({ id: modelId, status: 'unknown' });
       continue;
     }
@@ -67,7 +106,6 @@ export async function auditProviderContracts({
       openRouter.push({ id: modelId, status: 'unknown' });
       continue;
     }
-    const payload = await response.json();
     const endpoints = Array.isArray(payload?.endpoints)
       ? payload.endpoints
       : Array.isArray(payload?.data?.endpoints) ? payload.data.endpoints : [];
@@ -93,10 +131,11 @@ export async function auditProviderContracts({
   const gemini = [];
   for (const modelId of GEMINI_IMAGE_MODELS) {
     let response;
+    let payload;
     try {
-      response = await fetchImpl(`${geminiBaseUrl}/${encodeURIComponent(modelId)}`, { headers: { Accept: 'application/json' } });
+      ({ response, payload } = await fetchContract(fetchImpl, `${geminiBaseUrl}/${encodeURIComponent(modelId)}`));
     } catch {
-      errors.push(`Gemini ${modelId}: model metadata request failed`);
+      errors.push(`Gemini ${modelId}: model metadata request or bounded parse failed`);
       gemini.push({ id: modelId, status: 'unknown' });
       continue;
     }
@@ -105,7 +144,6 @@ export async function auditProviderContracts({
       gemini.push({ id: modelId, status: 'unavailable' });
       continue;
     }
-    const payload = await response.json();
     const methods = Array.isArray(payload?.supportedGenerationMethods) ? payload.supportedGenerationMethods : [];
     if (!methods.includes('generateContent')) {
       errors.push(`Gemini ${modelId}: generateContent is not advertised`);

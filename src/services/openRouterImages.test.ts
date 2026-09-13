@@ -38,7 +38,7 @@ describe('OpenRouter image client adapter', () => {
       'sourceful/riverflow-v2.5-pro',
       'sourceful/riverflow-v2.5-fast',
     ]);
-    expect(getOpenRouterModel('meta/muse-image')).toMatchObject({ coverCompatible: true, referenceStrategy: 'contact-sheet' });
+    expect(getOpenRouterModel('meta/muse-image')).toMatchObject({ coverCompatible: false, referenceStrategy: 'contact-sheet' });
     expect(getOpenRouterModel('krea/krea-2-large')).toMatchObject({ coverCompatible: true, referenceStrategy: 'contact-sheet' });
     expect(isOpenRouterImageModel('attacker/other-model')).toBe(false);
   });

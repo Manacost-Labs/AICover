@@ -21,7 +21,10 @@ export const OPENROUTER_IMAGE_MODELS = [
     providerName: 'Meta · OpenRouter',
     description: 'Агентная генерация Meta; доступ зависит от endpoint OpenRouter',
     maxReferences: 1,
-    coverCompatible: true,
+    // OpenRouter currently publishes no usable endpoint for Muse. Keep the
+    // catalog entry visible, but fail closed until its endpoint contract has
+    // been reviewed and this explicit hold is removed on both client/server.
+    coverCompatible: false,
     referenceStrategy: 'contact-sheet',
     maxReferenceBytes: 10 * 1024 * 1024,
     resolutions: [],

@@ -56,4 +56,15 @@ describe('provider contract verifier', () => {
     assert.equal(report.ok, false);
     assert.match(report.errors.join('\n'), /seedream-5-0-pro: no endpoint covers/);
   });
+
+  it('fails closed without buffering oversized provider metadata', async () => {
+    const oversized = new Response('x'.repeat(256 * 1024 + 1));
+    const report = await auditProviderContracts({
+      fetchImpl: async () => oversized,
+      geminiBaseUrl: 'http://cover.test/api/gemini/v1beta/models',
+      readPackageVersion: async () => '2.0.0',
+    });
+    assert.equal(report.ok, false);
+    assert.match(report.errors[0], /bounded parse failed/);
+  });
 });

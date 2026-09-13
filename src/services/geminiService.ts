@@ -126,6 +126,14 @@ const SOURCE_BRIEF_MAX_CHARS = 600;
 /** Limit parallel vision QA + refine calls in strict mode (429 / instability). */
 const STRICT_VISION_CONCURRENCY = 2;
 
+function optionalGeminiReferenceLimit(model: string, requiredImages: number, desiredOptional: number): number {
+  // Gemini 2.5 is documented to work best with no more than three input
+  // images. Required sources/output are retained; optional likes yield first.
+  return model === "gemini-2.5-flash-image"
+    ? Math.max(0, 3 - requiredImages)
+    : desiredOptional;
+}
+
 /** Keep vision-derived briefs bounded (main generation prompt + tokens). */
 function truncateUtf16(text: string, maxLen: number): string {
   const t = text.trim();
@@ -493,7 +501,8 @@ async function refineFusionAfterVision(
     parts.push({
       text: "QUALITY BENCHMARKS (style only, not identity):",
     });
-    for (const likedUrl of likedImages.slice(0, 2)) {
+    const optionalReferenceLimit = optionalGeminiReferenceLimit(model, sources.length + 1, 2);
+    for (const likedUrl of likedImages.slice(0, optionalReferenceLimit)) {
       const inline = await likedUrlToInlineData(likedUrl);
       if (inline) {
         parts.push({
@@ -811,9 +820,7 @@ export async function generateFusedCover(
     // Gemini 2.5 is documented to work best with up to three input images.
     // Required source/base images always win; only optional quality examples are trimmed.
     const requiredGenerationImages = sources.length + Number(Boolean(normalizedBaseImage));
-    const optionalReferenceLimit = model === "gemini-2.5-flash-image"
-      ? Math.max(0, 3 - requiredGenerationImages)
-      : 3;
+    const optionalReferenceLimit = optionalGeminiReferenceLimit(model, requiredGenerationImages, 3);
     const recentLikes = likedImages.slice(0, optionalReferenceLimit);
     for (const likedUrl of recentLikes) {
       try {

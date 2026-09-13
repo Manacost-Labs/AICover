@@ -57,3 +57,10 @@ Before production:
    encrypted ChatGPT sessions.
 6. Health, runtime capabilities, service stability, and minimal paid canaries
    are recorded separately from source/build success.
+
+Release commands require `COVER_RELEASE_COMMIT=<40-character reviewed SHA>`.
+Capture rebuilds `dist` from that exact clean revision under the source owner,
+records Node/npm/lockfile provenance and rechecks HEAD after the build. The same
+SHA pin is required again for rehearsal, deployment, verification, and rollback.
+Provider metadata is captured before activation; rollback health checks remain
+independent of third-party metadata availability.
