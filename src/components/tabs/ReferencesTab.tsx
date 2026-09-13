@@ -1,6 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Images, Plus, X, Trash2, Upload, Loader2, AlertTriangle, Settings } from 'lucide-react';
+import { Images, Plus, X, Trash2, Upload, Loader2, AlertTriangle, Settings, Search } from 'lucide-react';
+import { Button } from '../ui/Controls';
+import '../../styles/references.css';
 import type { ReferenceLibraryEntry } from '../../services/serverStorageService';
 import { OptimizedImage } from '../OptimizedImage';
 import { formatStorageError } from '../../services/serverStorageService';
@@ -25,6 +27,8 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
   isSaving,
 }) => {
   const [settingsEntry, setSettingsEntry] = useState<ReferenceLibraryEntry | null>(null);
+  const [query, setQuery] = useState('');
+  const visibleReferences = referenceLibrary.filter(entry => entry.name.toLocaleLowerCase('ru').includes(query.trim().toLocaleLowerCase('ru')));
   const [showForm, setShowForm] = useState(false);
   const [formName, setFormName] = useState('');
   const [formImage, setFormImage] = useState<{ data: string; mimeType: string } | null>(null);
@@ -68,22 +72,18 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
     : null;
 
   return (
-    <div className="cover-tab-page space-y-10">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-4xl font-black tracking-tighter text-white">Референсы</h2>
-          <p className="text-zinc-500 mt-2">
-            Сохраняйте композиции для быстрого выбора на вкладке «Создать»
-          </p>
-        </div>
-        <button
+    <div className="cover-tab-page studio-references-page">
+      <div className="studio-references-toolbar">
+        <p>Сохраняйте композиции и выбирайте их при создании обложки.</p>
+        <Button
+          variant="primary"
           onClick={() => setShowForm(s => !s)}
-          className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-bold text-sm transition-all hover:scale-105 active:scale-95 ${showForm ? 'cover-tab-action-muted' : 'cover-tab-action shadow-xl shadow-white/10'}`}
         >
           <Plus className="w-4 h-4" />
           Добавить референс
-        </button>
+        </Button>
       </div>
+      <div className="studio-references-filter"><label className="studio-reference-search"><Search size={18} aria-hidden="true" /><input value={query} onChange={event => setQuery(event.target.value)} aria-label="Поиск референсов" placeholder="Поиск по названию" /></label><span aria-live="polite">{visibleReferences.length} из {referenceLibrary.length}</span></div>
 
       <AnimatePresence>
         {showForm && (
@@ -199,36 +199,38 @@ export const ReferencesTab: React.FC<ReferencesTabProps> = ({
         )}
       </AnimatePresence>
 
-      {referenceLibrary.length > 0 ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 items-start">
-          {referenceLibrary.map(entry => (
-            <motion.div key={entry.id} layout className="group relative w-full rounded-[1.5rem] overflow-hidden bg-zinc-900 border border-white/5">
+      {visibleReferences.length > 0 ? (
+        <div className="studio-reference-grid studio-references-collection">
+          {visibleReferences.map(entry => (
+            <motion.div key={entry.id} layout className="studio-references-item">
               <button type="button" className="w-full block" onClick={() => setFullscreenImage(entry.storageUrl)}>
                 <OptimizedImage src={entry.storageUrl} alt={entry.name} className="w-full h-auto object-cover aspect-video" referrerPolicy="no-referrer" />
                 {entry.visionAnalysis && (
-                  <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-indigo-600/90 text-[9px] font-black uppercase text-white">AI</span>
+                  <span className="studio-references-analysis-label">Композиция разобрана</span>
                 )}
               </button>
-              <div className="p-2 flex items-center justify-between gap-2">
-                <span className="text-xs font-bold text-white truncate">{entry.name}</span>
+              <div className="studio-references-item__footer">
+                <span title={entry.name}>{entry.name}</span>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
                     type="button"
                     onClick={() => setSettingsEntry(entry)}
                     className="p-1.5 text-zinc-400 hover:text-white hover:bg-white/10 rounded-lg"
                     title="Настройки / анализ"
+                    aria-label={`Анализ: ${entry.name}`}
                   >
                     <Settings className="w-4 h-4" />
                   </button>
-                  <button type="button" onClick={() => onDeleteReference(entry.id, entry.storagePath)} className="p-1.5 text-red-400 hover:bg-red-500/10 rounded-lg" title="Удалить"><Trash2 className="w-4 h-4" /></button>
+                  <button type="button" onClick={() => { if (window.confirm(`Удалить референс «${entry.name}»?`)) void onDeleteReference(entry.id, entry.storagePath); }} className="p-1.5 text-red-400 hover:bg-red-500/10 rounded-lg" aria-label={`Удалить: ${entry.name}`} title="Удалить"><Trash2 className="w-4 h-4" /></button>
                 </div>
               </div>
             </motion.div>
           ))}
         </div>
       ) : (
-        <div className="cover-tab-empty h-[320px] flex flex-col items-center justify-center rounded-[2rem] border border-white/5 bg-zinc-900/30 text-zinc-500 text-sm">
-          Пока нет сохранённых референсов
+        <div className="studio-reference-empty">
+          <Images size={24} />
+          {referenceLibrary.length ? 'По этому названию ничего не найдено' : 'Пока нет сохранённых референсов'}
         </div>
       )}
     </div>

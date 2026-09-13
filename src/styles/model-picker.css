@@ -1,0 +1,197 @@
+/* Scoped independently of legacy controls: one component for every model choice. */
+.model-picker {
+  min-inline-size: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--cover-ink);
+}
+.model-picker .model-picker__legend {
+  float: none;
+  padding: 0;
+  margin: 0 0 10px;
+  color: var(--cover-ink);
+  font:
+    600 13px/20px Manrope,
+    system-ui,
+    sans-serif;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.model-picker .model-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 100px), 1fr));
+  gap: 8px;
+}
+.model-picker .model-picker__option {
+  position: relative;
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.model-picker__grid:has(> .model-picker__option:nth-child(4):last-child) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.model-picker .model-picker__option > input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+  z-index: 1;
+}
+.model-picker__tile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 108px;
+  padding: 12px;
+  border: 1px solid var(--cover-line);
+  border-radius: var(--cover-radius-md);
+  background: var(--cover-surface-raised);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+.model-picker__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.model-picker__logo {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid rgb(0 0 0 / 0.08);
+  border-radius: var(--cover-radius-sm);
+}
+.model-picker__logo img {
+  display: block;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+.model-picker__logo > span {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  background: var(--cover-subtle);
+  color: var(--cover-secondary);
+  font-size: 14px;
+  font-weight: 600;
+}
+.model-picker__check {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 1px solid var(--cover-line-strong);
+  border-radius: 50%;
+  color: transparent;
+  flex-shrink: 0;
+}
+.model-picker .model-picker__name {
+  display: block;
+  color: var(--cover-ink);
+  font:
+    600 13px/19px Manrope,
+    system-ui,
+    sans-serif;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+.model-picker .model-picker__provider {
+  display: block;
+  margin-top: 3px;
+  color: var(--cover-muted);
+  font:
+    400 11px/16px Manrope,
+    system-ui,
+    sans-serif;
+  letter-spacing: 0;
+}
+.model-picker__option > input:checked + .model-picker__tile {
+  background: var(--cover-accent-soft);
+  border-color: var(--cover-accent);
+}
+.model-picker__option
+  > input:checked
+  + .model-picker__tile
+  .model-picker__check {
+  background: var(--cover-accent);
+  border-color: var(--cover-accent);
+  color: var(--cover-accent-ink);
+}
+.model-picker__option
+  > input:checked
+  + .model-picker__tile
+  .model-picker__name {
+  color: var(--cover-selected-ink);
+}
+.model-picker__option:hover > input:not(:disabled) + .model-picker__tile {
+  border-color: var(--cover-accent);
+}
+.model-picker__option > input:active:not(:disabled) + .model-picker__tile {
+  background: var(--cover-subtle);
+}
+.model-picker__option > input:focus-visible + .model-picker__tile {
+  outline: 2px solid var(--cover-accent);
+  outline-offset: 3px;
+}
+.model-picker__option:has(> input:disabled) {
+  cursor: not-allowed;
+}
+.model-picker__option > input:disabled + .model-picker__tile {
+  opacity: 0.58;
+}
+.model-picker .model-picker__description {
+  min-height: 36px;
+  margin: 10px 0 0;
+  color: var(--cover-muted);
+  font:
+    400 12px/18px Manrope,
+    system-ui,
+    sans-serif;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.model-picker__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 479px) {
+  .model-picker__tile {
+    padding: 10px;
+  }
+}
+.studio-create__model {
+  margin-top: 16px;
+}
+.studio-thumbnail__model-section {
+  padding: 20px;
+  border: 1px solid var(--cover-line);
+  border-radius: var(--cover-radius-lg);
+  background: var(--cover-surface);
+}

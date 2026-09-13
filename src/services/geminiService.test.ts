@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { likedUrlToInlineData, normalizeImageSource } from './geminiService';
+import { generateFusedCover, likedUrlToInlineData, normalizeImageSource, type GenerationSettings } from './geminiService';
+import { composeOpenRouterReferenceSheet } from './openRouterReferenceComposer';
+
+vi.mock('./openRouterReferenceComposer', () => ({
+  composeOpenRouterReferenceSheet: vi.fn(async () => ({ mimeType: 'image/webp', data: 'UklGRgAAAABXRUJQ' })),
+}));
 
 describe('server-storage image sources', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -32,5 +37,94 @@ describe('server-storage image sources', () => {
 
     expect(inline).toEqual(expect.objectContaining({ mimeType: 'image/png' }));
     expect(inline.data).not.toContain('/uploads/');
+  });
+});
+
+describe('OpenRouter cover generation routing', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('routes the selected allowlisted model through one same-origin paid job', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ jobId: '9f8483e6-cb34-40fe-8a5c-73c4bc6beff7', status: 'pending' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'complete', imageUrl: 'data:image/png;base64,iVBORw0KGgo=' })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const settings = {
+      model: 'x-ai/grok-imagine-image-2.0',
+      aspectRatio: '16:9',
+      imageSize: '2K',
+      prompt: 'Two heroes in one scene',
+      batchSize: 1,
+      strictMode: true,
+    } satisfies GenerationSettings;
+
+    await expect(generateFusedCover([
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', role: 'left' },
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', role: 'right' },
+    ], null, settings)).resolves.toEqual(['data:image/png;base64,iVBORw0KGgo=']);
+
+    const start = fetchMock.mock.calls[0];
+    expect(start[0]).toBe('/api/thumbnail/openrouter-generate');
+    const body = JSON.parse(String(start[1]?.body));
+    expect(body).toMatchObject({
+      model: 'x-ai/grok-imagine-image-2.0',
+      aspectRatio: '16:9',
+      resolution: '2K',
+    });
+    expect(body.references).toHaveLength(2);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/thumbnail/openrouter-generate')).toHaveLength(1);
+  });
+
+  it('packs all required Muse inputs into one labeled contact sheet before the paid request', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ jobId: '9f8483e6-cb34-40fe-8a5c-73c4bc6beff7', status: 'pending' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'complete', imageUrl: 'data:image/png;base64,iVBORw0KGgo=' })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(generateFusedCover([
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png' },
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png' },
+    ], null, {
+      model: 'meta/muse-image',
+      aspectRatio: '16:9',
+      imageSize: '1K',
+      prompt: '',
+      batchSize: 1,
+    })).resolves.toEqual(['data:image/png;base64,iVBORw0KGgo=']);
+    expect(composeOpenRouterReferenceSheet).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({ label: 'SOURCE 1' }),
+      expect.objectContaining({ label: 'SOURCE 2' }),
+    ]), undefined, { maxBytes: 10 * 1024 * 1024 });
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.references).toEqual([{ mimeType: 'image/webp', data: 'UklGRgAAAABXRUJQ' }]);
+    expect(body.prompt).toContain('CONTACT SHEET');
+    expect(body).not.toHaveProperty('aspectRatio');
+    expect(body).not.toHaveProperty('resolution');
+  });
+
+  it('publishes a completed paid variant when a later OpenRouter variant fails without retrying', async () => {
+    const firstImage = 'data:image/png;base64,iVBORw0KGgo=';
+    const publish = vi.fn();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ jobId: '9f8483e6-cb34-40fe-8a5c-73c4bc6beff7', status: 'pending' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'complete', imageUrl: firstImage })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response('{}', { status: 429 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(generateFusedCover([
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', role: 'left' },
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', role: 'right' },
+    ], null, {
+      model: 'x-ai/grok-imagine-image-2.0',
+      aspectRatio: '16:9',
+      imageSize: '2K',
+      prompt: 'Two heroes in one scene',
+      batchSize: 2,
+    }, null, [], null, undefined, undefined, publish)).rejects.toThrow('Слишком много');
+
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(firstImage);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/thumbnail/openrouter-generate')).toHaveLength(2);
   });
 });

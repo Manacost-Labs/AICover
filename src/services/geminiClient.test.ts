@@ -11,7 +11,8 @@ describe('createGeminiClient', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await createGeminiClient().models.generateContent({
+    const client = await createGeminiClient();
+    await client.models.generateContent({
       model: 'gemini-3.1-flash-lite-preview',
       contents: 'test',
     });

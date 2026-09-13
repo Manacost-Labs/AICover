@@ -1,6 +1,9 @@
-import { GoogleGenAI } from "@google/genai";
+import type { GoogleGenAI } from "@google/genai";
 import { MODELS_SUPPORTING_IMAGE_SIZE } from "../constants";
+import { CHATGPT_IMAGE_MODEL, MAX_CHATGPT_IMAGE_REFERENCES, createChatGPTImageGenerator, type ChatGPTImageReference } from "./chatgptImages";
 import { createGeminiClient } from "./geminiClient";
+import { generateOpenRouterImage, getOpenRouterModel, isOpenRouterImageModel, type OpenRouterImageReference } from "./openRouterImages";
+import { composeOpenRouterReferenceSheet } from "./openRouterReferenceComposer";
 
 /** Multimodal vision for composition / QA (not the image generator). */
 const VISION_MODEL = "gemini-3.1-flash-lite-preview";
@@ -208,7 +211,7 @@ Rules:
  * Returns JSON string or raw model text if JSON parsing fails downstream.
  */
 export async function analyzeReferenceCompositionVision(image: ImageSource): Promise<string> {
-  const ai = createGeminiClient();
+  const ai = await createGeminiClient();
   try {
     const res = await ai.models.generateContent({
       model: VISION_MODEL,
@@ -258,7 +261,7 @@ export async function analyzeFavoriteChoiceVision(
   alternatives: ImageSource[],
   options?: { userPromptHint?: string }
 ): Promise<string> {
-  const ai = createGeminiClient();
+  const ai = await createGeminiClient();
   const hint = options?.userPromptHint?.trim();
   const parts: any[] = [
     {
@@ -321,7 +324,7 @@ export async function analyzeFavoriteVideoChoiceVision(
   alternatives: ImageSource[],
   options?: { userPromptHint?: string }
 ): Promise<string> {
-  const ai = createGeminiClient();
+  const ai = await createGeminiClient();
   const hint = options?.userPromptHint?.trim();
   const parts: any[] = [
     {
@@ -537,8 +540,193 @@ ${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}` : ""}`;
 export type CoverGenerationProgress = {
   done: number;
   total: number;
-  phase: 'preparing' | 'generating' | 'strict';
+  phase: 'preparing' | 'generating' | 'strict' | 'finalizing';
 };
+
+export type CoverGenerationResultHandler = (imageUrl: string) => void | Promise<void>;
+
+function chatGPTFusionPrompt(
+  settings: GenerationSettings,
+  sources: FusionSource[],
+  hasBaseImage: boolean,
+  hasReference: boolean,
+  qualityExampleCount: number,
+  referenceCompositionNotes: string | null,
+  variant: number,
+): string {
+  const customPrompt = hasBaseImage
+    ? settings.customSystemPromptEdit?.trim()
+    : settings.customSystemPromptCreate?.trim();
+  const defaultPrompt = hasBaseImage ? DEFAULT_SYSTEM_PROMPT_EDIT : DEFAULT_SYSTEM_PROMPT_CREATE;
+  const sourceRoles = sources.map((source, index) => `- ${fusionSourceLabel(source, index).replace(/\s*\(USE THIS EXACTLY\):$/, '')}`).join('\n');
+  let imageNumber = 1;
+  const referenceOrder = sources.map((source, index) => `Image ${imageNumber++}: ${fusionSourceLabel(source, index).replace(/\s*\(USE THIS EXACTLY\):$/, '')}`);
+  if (hasReference) referenceOrder.push(`Image ${imageNumber++}: COMPOSITION REFERENCE (spatial/framing guidance only)`);
+  if (hasBaseImage) referenceOrder.push(`Image ${imageNumber++}: BASE IMAGE TO REFINE`);
+  for (let index = 0; index < qualityExampleCount; index++) referenceOrder.push(`Image ${imageNumber++}: OPTIONAL QUALITY EXAMPLE`);
+  return `${customPrompt || defaultPrompt}
+
+IMPORTANT: Preserve the supplied character identities, faces, costumes, silhouettes, and readable details. Do not redraw, beautify, mutate, duplicate, or swap them. Integrate them into one coherent fantasy cover with unified lighting and no collage seams.
+DESIRED ASPECT RATIO: ${settings.aspectRatio}. This is a composition target; exact output dimensions are not guaranteed.
+${sourceRoles ? `SOURCE PLACEMENT:\n${sourceRoles}` : ''}
+${referenceOrder.length ? `REFERENCE IMAGE ORDER (exact request order):\n${referenceOrder.join('\n')}` : ''}
+${hasBaseImage ? 'A BASE IMAGE is included: refine its composition while retaining supplied source identities.' : ''}
+${hasReference ? 'A COMPOSITION REFERENCE is included: use only its spatial/framing guidance, not its characters, text, logos, or palette.' : ''}
+${referenceCompositionNotes?.trim() ? `COMPOSITION NOTES:\n${referenceCompositionNotes.trim()}` : ''}
+${settings.strictMode ? 'STRICT IDENTITY MODE: prioritize source identity fidelity. Automated vision QA is unavailable for this model.' : ''}
+${settings.prompt.trim() ? `USER REQUEST: ${settings.prompt.trim()}` : ''}
+${settings.negativePrompt?.trim() ? `AVOID: ${settings.negativePrompt.trim()}` : 'AVOID: redrawing, changing faces, mutations, extra limbs, collage, split-screen.'}
+${settings.batchSize > 1 ? `VARIANT ${variant} of ${settings.batchSize}: vary only camera framing or background rhythm; preserve all source identities.` : ''}`;
+}
+
+async function generateChatGPTFusedCover(
+  sources: FusionSource[],
+  reference: ImageSource | null,
+  settings: GenerationSettings,
+  baseImage: ImageSource | null,
+  likedImages: string[],
+  referenceCompositionNotes: string | null,
+  onProgress?: (p: CoverGenerationProgress) => void,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  if (!Number.isInteger(settings.batchSize) || settings.batchSize < 1 || settings.batchSize > 4) {
+    throw new Error('Для GPT Image доступен пакет от 1 до 4 вариантов.');
+  }
+  const requiredImages = [
+    ...sources,
+    ...(reference ? [reference] : []),
+    ...(baseImage ? [baseImage] : []),
+  ];
+  if (requiredImages.length > MAX_CHATGPT_IMAGE_REFERENCES) {
+    throw new Error(`Выбранные источники, база и референс превышают лимит ${MAX_CHATGPT_IMAGE_REFERENCES} изображений GPT Image.`);
+  }
+
+  onProgress?.({ done: 0, total: settings.batchSize, phase: 'preparing' });
+  const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
+  const normalizedReference = reference ? await normalizeImageSource(reference) : null;
+  const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
+  // Labels stay in the prompt; the API accepts the compact image shape only.
+  const references: ChatGPTImageReference[] = normalizedSources.map(({ data, mimeType }) => ({ data, mimeType }));
+
+  if (normalizedReference) references.push(normalizedReference);
+  if (normalizedBaseImage) references.push(normalizedBaseImage);
+
+  // Likes are optional quality examples. Required source/base/reference images are
+  // never displaced; the UI can surface that excess likes were not sent to GPT.
+  for (const likedUrl of likedImages) {
+    if (references.length >= MAX_CHATGPT_IMAGE_REFERENCES) break;
+    const inline = await likedUrlToInlineData(likedUrl);
+    if (inline) references.push(inline);
+  }
+
+  const results: string[] = [];
+  const generateImage = await createChatGPTImageGenerator(references, signal);
+  onProgress?.({ done: 0, total: settings.batchSize, phase: 'generating' });
+  for (let index = 0; index < settings.batchSize; index++) {
+    results.push(await generateImage(
+      chatGPTFusionPrompt(settings, sources, Boolean(normalizedBaseImage), Boolean(normalizedReference), references.length - normalizedSources.length - Number(Boolean(normalizedReference)) - Number(Boolean(normalizedBaseImage)), referenceCompositionNotes, index + 1),
+    ));
+    onProgress?.({ done: index + 1, total: settings.batchSize, phase: 'generating' });
+  }
+  return results;
+}
+
+async function generateOpenRouterFusedCover(
+  sources: FusionSource[],
+  reference: ImageSource | null,
+  settings: GenerationSettings,
+  baseImage: ImageSource | null,
+  likedImages: string[],
+  referenceCompositionNotes: string | null,
+  onProgress?: (p: CoverGenerationProgress) => void,
+  signal?: AbortSignal,
+  onResult?: CoverGenerationResultHandler,
+): Promise<string[]> {
+  const model = getOpenRouterModel(settings.model);
+  if (!model || !isOpenRouterImageModel(settings.model) || !model.coverCompatible) {
+    throw new Error('Эта модель OpenRouter пока несовместима с редактором Cover.');
+  }
+  if (!Number.isInteger(settings.batchSize) || settings.batchSize < 1 || settings.batchSize > 4) {
+    throw new Error('Для OpenRouter доступен пакет от 1 до 4 вариантов.');
+  }
+  const requiredImages = [
+    ...sources,
+    ...(reference ? [reference] : []),
+    ...(baseImage ? [baseImage] : []),
+  ];
+  if (model.referenceStrategy !== 'contact-sheet' && requiredImages.length > model.maxReferences) {
+    throw new Error(`${model.name} принимает не больше ${model.maxReferences} изображений вместе с референсом и основой.`);
+  }
+  if (model.aspectRatios.length > 0 && !(model.aspectRatios as readonly string[]).includes(settings.aspectRatio)) {
+    throw new Error(`${model.name} не поддерживает выбранный формат.`);
+  }
+  if (model.resolutions.length > 0 && !(model.resolutions as readonly string[]).includes(settings.imageSize)) {
+    throw new Error(`${model.name} не поддерживает выбранное разрешение.`);
+  }
+
+  onProgress?.({ done: 0, total: settings.batchSize, phase: 'preparing' });
+  const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
+  const normalizedReference = reference ? await normalizeImageSource(reference) : null;
+  const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
+  let references: OpenRouterImageReference[] = normalizedSources.map(({ data, mimeType }) => ({
+    data,
+    mimeType: mimeType as OpenRouterImageReference['mimeType'],
+  }));
+  if (normalizedReference) references.push(normalizedReference as OpenRouterImageReference);
+  if (normalizedBaseImage) references.push(normalizedBaseImage as OpenRouterImageReference);
+
+  if (model.referenceStrategy === 'contact-sheet') {
+    const panels = [
+      ...normalizedSources.map((source, index) => ({ label: `SOURCE ${index + 1}`, reference: source as OpenRouterImageReference })),
+      ...(normalizedReference ? [{ label: 'COMPOSITION', reference: normalizedReference as OpenRouterImageReference }] : []),
+      ...(normalizedBaseImage ? [{ label: 'BASE', reference: normalizedBaseImage as OpenRouterImageReference }] : []),
+    ];
+    references = [await composeOpenRouterReferenceSheet(panels, signal, {
+      maxBytes: model.maxReferenceBytes,
+    })];
+  } else {
+    for (const likedUrl of likedImages) {
+      if (references.length >= model.maxReferences) break;
+      const inline = await likedUrlToInlineData(likedUrl);
+      if (inline) references.push(inline as OpenRouterImageReference);
+    }
+  }
+
+  const optionalExampleCount = model.referenceStrategy === 'contact-sheet'
+    ? 0
+    : references.length - normalizedSources.length - Number(Boolean(normalizedReference)) - Number(Boolean(normalizedBaseImage));
+  const contactSheetPrompt = model.referenceStrategy === 'contact-sheet'
+    ? '\n\nINPUT PACKAGING — CONTACT SHEET: The single reference image contains labeled panels. Treat every SOURCE panel as a separate identity reference, COMPOSITION as layout guidance, and BASE as the editable base. Every source is shown fully without cropping; preserve the complete subjects and do not merge identities.'
+    : '';
+  const results: string[] = [];
+  onProgress?.({ done: 0, total: settings.batchSize, phase: 'generating' });
+  for (let index = 0; index < settings.batchSize; index++) {
+    results.push(await generateOpenRouterImage({
+      model: settings.model,
+      prompt: chatGPTFusionPrompt(
+        settings,
+        sources,
+        Boolean(normalizedBaseImage),
+        Boolean(normalizedReference),
+        optionalExampleCount,
+        referenceCompositionNotes,
+        index + 1,
+      ) + contactSheetPrompt,
+      references,
+      ...(model.aspectRatios.length > 0 ? { aspectRatio: settings.aspectRatio } : {}),
+      ...(model.resolutions.length > 0 && settings.imageSize !== '512px'
+        ? { resolution: settings.imageSize }
+        : {}),
+    }, signal, {
+      onResult: async (imageUrl) => {
+        onProgress?.({ done: index, total: settings.batchSize, phase: 'finalizing' });
+        await onResult?.(imageUrl);
+      },
+    }));
+    onProgress?.({ done: index + 1, total: settings.batchSize, phase: 'generating' });
+  }
+  return results;
+}
 
 export async function generateFusedCover(
   sources: FusionSource[],
@@ -547,9 +735,17 @@ export async function generateFusedCover(
   baseImage: ImageSource | null = null,
   likedImages: string[] = [],
   referenceCompositionNotes: string | null = null,
-  onProgress?: (p: CoverGenerationProgress) => void
+  onProgress?: (p: CoverGenerationProgress) => void,
+  signal?: AbortSignal,
+  onResult?: CoverGenerationResultHandler,
 ): Promise<string[]> {
-  const ai = createGeminiClient();
+  if (settings.model === CHATGPT_IMAGE_MODEL) {
+    return generateChatGPTFusedCover(sources, reference, settings, baseImage, likedImages, referenceCompositionNotes, onProgress, signal);
+  }
+  if (isOpenRouterImageModel(settings.model)) {
+    return generateOpenRouterFusedCover(sources, reference, settings, baseImage, likedImages, referenceCompositionNotes, onProgress, signal, onResult);
+  }
+  const ai = await createGeminiClient();
   const model = settings.model;
   const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
 
@@ -800,7 +996,7 @@ export async function upscaleImage(
   targetSize: "1K" | "2K" | "4K" = "4K",
   model: string = "gemini-3.1-flash-image-preview"
 ): Promise<string> {
-  const ai = createGeminiClient();
+  const ai = await createGeminiClient();
   const normalized = await normalizeImageSource(image);
 
   const imageConfig: any = {};
@@ -845,7 +1041,7 @@ export async function expandImage(
   prompt: string = "",
   model: string = "gemini-3.1-flash-image-preview"
 ): Promise<string> {
-  const ai = createGeminiClient();
+  const ai = await createGeminiClient();
   const normalized = await normalizeImageSource(image);
 
   const response = await ai.models.generateContent({

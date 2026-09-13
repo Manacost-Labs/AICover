@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import type { GoogleGenAI } from "@google/genai";
 import type { ImageSource } from "./geminiService";
 import { createGeminiClient } from "./geminiClient";
 
@@ -145,7 +145,7 @@ export async function generateVeoVideoFromImage(
 
   onProgress?.({ phase: "submitting", percent: 0 });
 
-  const ai = createGeminiClient();
+  const ai = await createGeminiClient();
 
   if (batchSize === 1) {
     const url = await generateOneVeoVideo(

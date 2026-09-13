@@ -1,5 +1,6 @@
 import { buildThumbnailPrompt } from '../features/thumbnail/prompt';
 import type { ThumbnailAsset, ThumbnailGenerationSettings } from '../features/thumbnail/types';
+import { CHATGPT_IMAGE_MODEL, createChatGPTImageGenerator } from './chatgptImages';
 import { createGeminiClient } from './geminiClient';
 
 type InlineImage = { data: string; mimeType: string };
@@ -34,10 +35,27 @@ export async function generateHearthstoneThumbnailBackgrounds(
   assets: ThumbnailAsset[],
   settings: ThumbnailGenerationSettings,
   onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<string[]> {
   if (assets.length === 0) throw new Error('Добавьте хотя бы один игровой ассет');
 
-  const ai = createGeminiClient();
+  if (settings.model === CHATGPT_IMAGE_MODEL) {
+    if (!Number.isInteger(settings.batchSize) || settings.batchSize < 1 || settings.batchSize > 4) {
+      throw new Error('Для GPT Image доступен пакет от 1 до 4 вариантов.');
+    }
+    const inlineAssets = await Promise.all(assets.slice(0, 4).map(assetToInline));
+    const generateImage = await createChatGPTImageGenerator(inlineAssets, signal);
+    const results: string[] = [];
+    for (let index = 0; index < settings.batchSize; index++) {
+      results.push(await generateImage(
+        `${buildThumbnailPrompt(settings, index + 1)}\n\nDESIRED ASPECT RATIO: 16:9. This is a composition target; exact output dimensions are not guaranteed.`,
+      ));
+      onProgress?.(index + 1, settings.batchSize);
+    }
+    return results;
+  }
+
+  const ai = await createGeminiClient();
   const inlineAssets = await Promise.all(assets.slice(0, 4).map(assetToInline));
   let completed = 0;
 

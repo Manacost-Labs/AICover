@@ -1,32 +1,42 @@
-import React from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
-  Plus,
-  X,
+  Download,
+  Expand,
+  Heart,
   ImageIcon,
   Layout,
-  Upload,
-  Settings,
-  Sparkles,
   Loader2,
   Maximize2,
-  AlertTriangle,
-  LayoutGrid,
-  GripVertical,
-} from 'lucide-react';
-import type { CoverGenerationProgress, SceneRole } from '../../services/geminiService';
-import { sceneRolesOrder } from '../../services/geminiService';
-import { ResultCard } from '../ResultCard';
-import { DeckImportSection } from '../DeckImportSection';
-import { OptimizedImage } from '../OptimizedImage';
-import type { CardLibraryEntry, ReferenceLibraryEntry } from '../../services/serverStorageService';
-import { GENERATION_MODELS, MODELS_NO_512PX } from '../../constants';
+  Plus,
+  Settings,
+  Upload,
+  X,
+} from "lucide-react";
+import type {
+  CoverGenerationProgress,
+  SceneRole,
+} from "../../services/geminiService";
+import { sceneRolesOrder } from "../../services/geminiService";
+import { DeckImportSection } from "../DeckImportSection";
+import { OptimizedImage } from "../OptimizedImage";
+import type {
+  CardLibraryEntry,
+  ReferenceLibraryEntry,
+} from "../../services/serverStorageService";
+import { MODELS_NO_512PX } from "../../constants";
+import { Button } from "../ui/Controls";
+import { ReferencePicker } from "../ui/ReferencePicker";
+import { ProviderModelPicker as ModelPicker, ChatGptImageNotice, OpenRouterImageNotice, useOpenRouterModelAvailability } from "../ui/ChatGptConnection";
+import { generationModelOptions } from "../../features/models/options";
+import { getOpenRouterModel, isOpenRouterImageModel, normalizeOpenRouterSettings } from "../../services/openRouterImages";
+import "../../styles/create.css";
 
 interface CreateTabProps {
   sources: any[];
   setSources: React.Dispatch<React.SetStateAction<any[]>>;
-  createLayoutMode: 'cover' | 'scene';
-  onCreateLayoutModeChange: (mode: 'cover' | 'scene') => void;
+  createLayoutMode: "cover" | "scene";
+  onCreateLayoutModeChange: (mode: "cover" | "scene") => void;
   scenePlan: 2 | 3;
   onScenePlanChange: (plan: 2 | 3) => void;
   focusedSceneSlot: SceneRole;
@@ -54,15 +64,21 @@ interface CreateTabProps {
   handleDragOver: (e: React.DragEvent) => void;
   handleDragLeave: () => void;
   handleDrop: (e: React.DragEvent) => void;
-  handleLocalPaste: (e: React.ClipboardEvent, type: 'source' | 'reference') => void;
+  handleLocalPaste: (
+    e: React.ClipboardEvent,
+    type: "source" | "reference",
+  ) => void;
   sourceInputRef: React.RefObject<HTMLInputElement | null>;
   refInputRef: React.RefObject<HTMLInputElement | null>;
   promptRef: React.RefObject<HTMLTextAreaElement | null>;
-  handleFileChange: (e: React.ChangeEvent<HTMLInputElement>, type: 'source' | 'reference') => void;
+  handleFileChange: (
+    e: React.ChangeEvent<HTMLInputElement>,
+    type: "source" | "reference",
+  ) => void;
   handleDragOverRef: (e: React.DragEvent) => void;
   handleDragLeaveRef: () => void;
   handleDropRef: (e: React.DragEvent) => void;
-  selectReferenceFromLibrary: (entry: ReferenceLibraryEntry) => Promise<void>;
+  selectReferenceFromLibrary: (entry: ReferenceLibraryEntry, signal?: AbortSignal) => Promise<void>;
   ASPECT_RATIOS: string[];
   RESOLUTIONS: string[];
   isDraggingRef: boolean;
@@ -70,29 +86,117 @@ interface CreateTabProps {
   cardLibrary: CardLibraryEntry[];
   onAddCardSource: (entry: CardLibraryEntry) => void;
   onRemoveCardSource: (sourceId: string) => void;
+  availability?: "checking" | "available" | "unavailable";
+  onRetryAvailability?: () => void;
+  onOpenSettings?: () => void;
+  saveWarning?: string | null;
+  generationNotice?: string | null;
+  openRouterEnabled?: boolean;
+}
+const SCENE_DRAG_MIME = "application/x-manacost-scene-role";
+const label = (role: SceneRole) =>
+  role === "left" ? "Лево" : role === "center" ? "Центр" : "Право";
+function swap(
+  items: { id: string; role?: SceneRole }[],
+  from: SceneRole,
+  to: SceneRole,
+) {
+  const a = items.find((x) => x.role === from),
+    b = items.find((x) => x.role === to);
+  if (!a) return items;
+  return items.map((x) =>
+    x.id === a.id
+      ? { ...x, role: to }
+      : b && x.id === b.id
+        ? { ...x, role: from }
+        : x,
+  );
+}
+function download(url: string, index: number) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `cover-${index + 1}.png`;
+  a.click();
 }
 
-const sceneRoleLabel = (r: SceneRole) =>
-  r === 'left' ? 'Лево' : r === 'center' ? 'Центр' : 'Право';
+const progressSteps = [
+  { id: 'preparing', label: 'Подготовка' },
+  { id: 'generating', label: 'Создание' },
+  { id: 'finalizing', label: 'Финализация' },
+] as const;
 
-const SCENE_DRAG_MIME = 'application/x-manacost-scene-role';
+function imageSource(source: any) {
+  return typeof source?.data === 'string' && source.data.startsWith('data:')
+    ? source.data
+    : `data:${source?.mimeType || 'image/png'};base64,${source?.data || ''}`;
+}
 
-function swapSceneSlotRoles(
-  prev: { id: string; role?: SceneRole }[],
-  from: SceneRole,
-  to: SceneRole
-) {
-  const a = prev.find(s => s.role === from);
-  if (!a) return prev;
-  const b = prev.find(s => s.role === to);
-  if (!b) {
-    return prev.map(s => (s.id === a.id ? { ...s, role: to } : s));
-  }
-  return prev.map(s => {
-    if (s.id === a.id) return { ...s, role: to };
-    if (s.id === b.id) return { ...s, role: from };
-    return s;
-  });
+function GenerationStage({
+  progress,
+  sources,
+  aspectRatio,
+  modelName,
+  onCancel,
+}: {
+  progress: CoverGenerationProgress | null;
+  sources: any[];
+  aspectRatio: string;
+  modelName: string;
+  onCancel: () => void;
+}) {
+  const reducedMotion = useReducedMotion();
+  const phase = progress?.phase === 'strict' ? 'finalizing' : progress?.phase || 'preparing';
+  const activeIndex = progressSteps.findIndex(step => step.id === phase);
+  const status = phase === 'preparing'
+    ? 'Собираем исходники без обрезки'
+    : phase === 'finalizing'
+      ? 'Проверяем и сохраняем результат'
+      : 'Модель выстраивает композицию';
+  const ratio = /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(aspectRatio) ? aspectRatio.replace(':', ' / ') : '16 / 9';
+  return (
+    <motion.div
+      className="studio-generation"
+      data-generation-stage={phase}
+      initial={reducedMotion ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+      aria-live="polite"
+    >
+      <div className="studio-generation__visual" style={{ aspectRatio: ratio }}>
+        <div className="studio-generation__sources" aria-hidden="true">
+          {sources.slice(0, 3).map((source, index) => (
+            <motion.img
+              src={imageSource(source)}
+              alt=""
+              key={source.id || index}
+              initial={reducedMotion ? false : { opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: reducedMotion ? 0 : index * 0.08, duration: 0.24 }}
+            />
+          ))}
+        </div>
+        <div className="studio-generation__output" aria-hidden="true">
+          <ImageIcon size={26} strokeWidth={1.5} />
+          {phase === 'generating' && <span className="studio-generation__scan" />}
+        </div>
+      </div>
+      <div className="studio-generation__status">
+        <div>
+          <strong>{status}</strong>
+          <span>{modelName}{progress && progress.total > 1 ? ` · ${progress.done} из ${progress.total}` : ''}</span>
+        </div>
+        <ol aria-label="Этапы генерации">
+          {progressSteps.map((step, index) => (
+            <li key={step.id} className={index < activeIndex ? 'is-complete' : index === activeIndex ? 'is-active' : ''}>
+              <span>{index + 1}</span>{step.label}
+            </li>
+          ))}
+        </ol>
+        <button type="button" onClick={onCancel}>Остановить ожидание</button>
+        <small>Отправленная операция может продолжиться у провайдера.</small>
+      </div>
+    </motion.div>
+  );
 }
 
 export const CreateTab: React.FC<CreateTabProps> = ({
@@ -143,642 +247,775 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   cardLibrary,
   onAddCardSource,
   onRemoveCardSource,
+  availability = "available",
+  onRetryAvailability,
+  onOpenSettings,
+  saveWarning,
+  generationNotice,
+  openRouterEnabled = false,
 }) => {
-  const sceneRoles = sceneRolesOrder(scenePlan);
-  const sceneFilled = sceneRoles.filter(r => sources.some((s: { role?: SceneRole }) => s.role === r)).length;
-  const maxCover = 4;
-  const maxScene = scenePlan;
-  const [sceneDragOverRole, setSceneDragOverRole] = React.useState<SceneRole | null>(null);
-
+  const [advanced, setAdvanced] = React.useState(false);
+  const [dragRole, setDragRole] = React.useState<SceneRole | null>(null);
+  const modelAvailability = useOpenRouterModelAvailability();
+  const roles = sceneRolesOrder(scenePlan);
+  const filled = roles.filter((r) => sources.some((s) => s.role === r)).length;
+  const valid =
+    createLayoutMode === "cover" ? sources.length >= 2 : filled === scenePlan;
+  const openRouterModel = getOpenRouterModel(settings.model);
+  const requiredReferenceCount = sources.length + Number(Boolean(reference)) + Number(Boolean(baseImage));
+  const automaticImageSize = settings.model === 'gpt-image-2'
+    || Boolean(openRouterModel && openRouterModel.resolutions.length === 0);
+  const reason = isUpscaling
+    ? "Дождитесь завершения апскейла."
+    : settings.model === 'gpt-image-2' && sources.length + Number(Boolean(reference)) + Number(Boolean(baseImage)) > 5
+      ? 'GPT Image 2 принимает до 5 изображений вместе с референсом и основой. Уберите лишний исходник.'
+    : openRouterModel && modelAvailability[openRouterModel.id] === 'unavailable'
+      ? `У ${openRouterModel.name} сейчас нет активного endpoint OpenRouter. Выберите другую модель.`
+    : openRouterModel && openRouterModel.referenceStrategy !== 'contact-sheet' && requiredReferenceCount > openRouterModel.maxReferences
+      ? `${openRouterModel.name} принимает до ${openRouterModel.maxReferences} изображений вместе с референсом и основой.`
+    : availability === "checking"
+      ? "Проверяем доступность генерации."
+      : availability === "unavailable"
+        ? "Генерация сейчас недоступна. Проверьте настройки и повторите проверку."
+        : !valid
+          ? createLayoutMode === "cover"
+            ? sources.length === 0
+              ? "Добавьте минимум два изображения."
+              : "Добавьте ещё одно изображение."
+            : "Заполните все обязательные роли сцены."
+          : null;
+  const setMode = (mode: "cover" | "scene") => {
+    if (
+      mode === "scene" &&
+      sources.length > scenePlan &&
+      !window.confirm(
+        "В сцене останутся только первые " +
+          scenePlan +
+          " изображения. Продолжить?",
+      )
+    )
+      return;
+    onCreateLayoutModeChange(mode);
+  };
+  const plan = (value: 2 | 3) => {
+    if (value === scenePlan) return;
+    if (
+      value === 2 &&
+      sources.some((s) => s.role === "center") &&
+      !window.confirm(
+        "Центральное изображение будет удалено из сцены. Продолжить?",
+      )
+    )
+      return;
+    onScenePlanChange(value);
+  };
+  const move = (from: SceneRole, direction: -1 | 1) => {
+    const to = roles[roles.indexOf(from) + direction];
+    if (to) {
+      setSources((all) => swap(all, from, to));
+      onFocusedSceneSlotChange(to);
+    }
+  };
+  const refine = (url: string) => {
+    setBaseImage({ data: url, mimeType: "image/png" });
+    window.setTimeout(() => promptRef.current?.focus(), 0);
+  };
   return (
-    <div className="cover-create-layout grid grid-cols-1 lg:grid-cols-12 gap-10">
-      {/* Left Column: Controls */}
-      <div className="cover-create-controls lg:col-span-4 space-y-10">
-          {/* Source Images */}
-          <section className="cover-panel cover-source-panel space-y-6">
-            <div className="flex flex-col gap-4">
-              <div className="flex rounded-2xl bg-zinc-900/80 p-1 border border-white/5">
-                <button
-                  type="button"
-                  onClick={() => onCreateLayoutModeChange('cover')}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                    createLayoutMode === 'cover' ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-500 hover:text-zinc-300'
-                  }`}
-                >
-                  <ImageIcon className="w-3.5 h-3.5" />
-                  Обложка
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onCreateLayoutModeChange('scene')}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                    createLayoutMode === 'scene' ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-500 hover:text-zinc-300'
-                  }`}
-                >
-                  <LayoutGrid className="w-3.5 h-3.5" />
-                  Сцена
-                </button>
-              </div>
-              <AnimatePresence>
-                {sceneToCoverWarning && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }}
-                    className="px-4 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-400 font-medium"
-                  >
-                    Назначения слотов (лево/центр/право) сброшены. Изображения сохранены.
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              {createLayoutMode === 'scene' && (
-                <div className="flex rounded-2xl bg-zinc-900/50 p-1 border border-white/5">
-                  <button
-                    type="button"
-                    onClick={() => onScenePlanChange(2)}
-                    className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                      scenePlan === 2 ? 'bg-indigo-600 text-white' : 'text-zinc-500 hover:text-zinc-300'
-                    }`}
-                  >
-                    2 персонажа
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onScenePlanChange(3)}
-                    className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                      scenePlan === 3 ? 'bg-indigo-600 text-white' : 'text-zinc-500 hover:text-zinc-300'
-                    }`}
-                  >
-                    3 персонажа
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-black uppercase tracking-[0.2em] text-zinc-500 flex items-center gap-2">
-                <ImageIcon className="w-4 h-4" />
-                {createLayoutMode === 'cover' ? (
-                  <>Исходные изображения ({sources.length}/{maxCover})</>
-                ) : (
-                  <>Сцена: {sceneFilled}/{maxScene}</>
-                )}
-              </h2>
-              {sources.length > 0 && (
-                <button 
-                  onClick={() => setSources([])}
-                  className="text-[10px] font-black text-red-500/50 hover:text-red-500 uppercase tracking-widest transition-colors"
-                >
-                  Очистить
-                </button>
-              )}
-            </div>
-            <div
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              onPaste={(e) => handleLocalPaste(e, 'source')}
-              tabIndex={0}
-              className={`cover-upload-dropzone ${
-                createLayoutMode === 'cover' ? 'grid grid-cols-2' : `grid gap-3 ${scenePlan === 2 ? 'grid-cols-2' : 'grid-cols-3'}`
-              } gap-4 p-3 rounded-[2.5rem] transition-all bg-zinc-900/50 border-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${isDragging ? 'bg-indigo-500/10 border-indigo-500/50 scale-[1.02]' : 'border-white/5'}`}
+    <div className="studio-create" aria-label="Редактор создания обложки">
+      <div className="studio-create__rail">
+        <div
+          className="studio-create__modes"
+          role="radiogroup"
+          aria-label="Тип композиции"
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+              e.preventDefault();
+              const next = createLayoutMode === "cover" ? "scene" : "cover";
+              setMode(next);
+              const group = e.currentTarget as HTMLDivElement;
+              group
+                .querySelector<HTMLButtonElement>(`[data-mode="${next}"]`)
+                ?.focus();
+            }
+          }}
+        >
+          {(["cover", "scene"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              role="radio"
+              data-mode={mode}
+              tabIndex={createLayoutMode === mode ? 0 : -1}
+              aria-checked={createLayoutMode === mode}
+              className="studio-create__segment"
+              onClick={() => setMode(mode)}
             >
-              {createLayoutMode === 'cover' ? (
-                <>
-                  {sources.map((src: { id: string; data: string }) => (
-                    <motion.div 
-                      layoutId={src.id}
-                      key={src.id} 
-                      className="relative group aspect-square rounded-3xl overflow-hidden bg-zinc-900 border border-white/5 shadow-sm cursor-pointer"
-                      onClick={() => setFullscreenImage(src.data)}
-                    >
-                      <OptimizedImage src={src.data} alt="Source" className="w-full h-full object-cover" referrerPolicy="no-referrer" priority />
-                      <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
-                        <button 
-                          onClick={() => setSources((prev: any[]) => prev.filter(s => s.id !== src.id))}
-                          className="p-2 bg-red-500 text-white rounded-xl hover:scale-110 transition-transform shadow-md"
+              {mode === "cover" ? (
+                <ImageIcon size={16} />
+              ) : (
+                <Layout size={16} />
+              )}
+              {mode === "cover" ? "Обложка" : "Сцена"}
+            </button>
+          ))}
+        </div>
+        {sceneToCoverWarning && (
+          <p
+            className="studio-create__notice studio-create__notice--warning"
+            role="status"
+          >
+            Роли слотов сброшены, изображения сохранены.
+          </p>
+        )}
+        <section
+          className="studio-create__section"
+          aria-labelledby="create-sources"
+        >
+          <div className="studio-create__section-heading">
+            <h2 id="create-sources">
+              Исходники{" "}
+              {createLayoutMode === "cover"
+                ? `${sources.length}/4`
+                : `${filled}/${scenePlan}`}
+            </h2>
+            {sources.length > 0 && (
+              <button
+                type="button"
+                className="studio-create__text-action"
+                onClick={() => setSources([])}
+              >
+                Очистить
+              </button>
+            )}
+          </div>
+          {createLayoutMode === "scene" && (
+            <div className="studio-create__plan">
+              <button
+                type="button"
+                className={scenePlan === 2 ? "is-selected" : ""}
+                onClick={() => plan(2)}
+              >
+                2 персонажа
+              </button>
+              <button
+                type="button"
+                className={scenePlan === 3 ? "is-selected" : ""}
+                onClick={() => plan(3)}
+              >
+                3 персонажа
+              </button>
+            </div>
+          )}
+          <div
+            className={`studio-create__sources studio-create__sources--${createLayoutMode} ${isDragging ? "is-dragging" : ""}`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onPaste={(e) => handleLocalPaste(e, "source")}
+            tabIndex={0}
+          >
+            {createLayoutMode === "cover"
+              ? sources.map(
+                  (source: { id: string; data: string }, index: number) => (
+                    <article className="studio-create__source" key={source.id}>
+                      <button
+                        type="button"
+                        className="studio-create__media-button"
+                        onClick={() => setFullscreenImage(source.data)}
+                        aria-label={`Открыть исходник ${index + 1}`}
+                      >
+                        <OptimizedImage
+                          src={source.data}
+                          alt={`Исходник ${index + 1}`}
+                          className="studio-create__image"
+                          referrerPolicy="no-referrer"
+                          priority
+                        />
+                      </button>
+                      <span className="studio-create__source-label">
+                        {index + 1}
+                      </span>
+                      <div className="studio-create__cover-move">
+                        <button
+                          type="button"
+                          disabled={index === 0}
+                          aria-label={`Переместить исходник ${index + 1} влево`}
+                          onClick={() =>
+                            setSources((all) => {
+                              const next = [...all];
+                              [next[index - 1], next[index]] = [
+                                next[index],
+                                next[index - 1],
+                              ];
+                              return next;
+                            })
+                          }
                         >
-                          <X className="w-4 h-4" />
+                          ←
+                        </button>
+                        <button
+                          type="button"
+                          disabled={index === sources.length - 1}
+                          aria-label={`Переместить исходник ${index + 1} вправо`}
+                          onClick={() =>
+                            setSources((all) => {
+                              const next = [...all];
+                              [next[index], next[index + 1]] = [
+                                next[index + 1],
+                                next[index],
+                              ];
+                              return next;
+                            })
+                          }
+                        >
+                          →
                         </button>
                       </div>
-                    </motion.div>
-                  ))}
-                  {sources.length < maxCover && (
-                    <button 
-                      type="button"
-                      onClick={() => sourceInputRef.current?.click()}
-                      className="aspect-square rounded-3xl border-2 border-dashed border-white/10 hover:border-indigo-500/50 hover:bg-white/5 transition-all flex flex-col items-center justify-center gap-3 text-zinc-500 hover:text-indigo-400 group"
-                    >
-                      <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center group-hover:scale-110 transition-transform">
-                        <Plus className="w-6 h-6" />
-                      </div>
-                      <span className="text-[10px] font-black uppercase tracking-widest">Загрузить</span>
-                    </button>
-                  )}
-                </>
-              ) : (
-                <>
-                  {sceneRoles.map(role => {
-                    const src = sources.find((s: { role?: SceneRole }) => s.role === role);
-                    const isFocused = focusedSceneSlot === role;
-                    const isDragOver = sceneDragOverRole === role;
-                    const onSceneSlotDragOver = (e: React.DragEvent) => {
-                      if (!Array.from(e.dataTransfer.types).includes(SCENE_DRAG_MIME)) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      e.dataTransfer.dropEffect = 'move';
-                      setSceneDragOverRole(role);
-                    };
-                    const onSceneSlotDrop = (e: React.DragEvent) => {
-                      if (!Array.from(e.dataTransfer.types).includes(SCENE_DRAG_MIME)) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setSceneDragOverRole(null);
-                      const from = e.dataTransfer.getData(SCENE_DRAG_MIME) as SceneRole;
-                      if (!from || from === role) return;
-                      setSources((prev: any[]) => swapSceneSlotRoles(prev, from, role));
-                      onFocusedSceneSlotChange(role);
-                    };
-                    return (
-                      <div
-                        key={role}
-                        role="presentation"
-                        onClick={() => onFocusedSceneSlotChange(role)}
-                        onDragOver={onSceneSlotDragOver}
-                        onDrop={onSceneSlotDrop}
-                        className={`flex flex-col gap-2 min-w-0 ${isFocused ? 'ring-2 ring-indigo-500/60 rounded-3xl p-1 -m-1' : ''} ${isDragOver ? 'ring-2 ring-amber-500/50 rounded-3xl' : ''}`}
+                      <button
+                        type="button"
+                        className="studio-create__remove"
+                        onClick={() =>
+                          setSources((all) =>
+                            all.filter((x) => x.id !== source.id),
+                          )
+                        }
+                        aria-label={`Удалить исходник ${index + 1}`}
                       >
-                        <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500 text-center">
-                          {sceneRoleLabel(role)}
-                        </span>
-                        {src ? (
-                          <motion.div 
-                            layoutId={src.id}
-                            draggable
-                            onDragStart={e => {
-                              e.dataTransfer.setData(SCENE_DRAG_MIME, role);
-                              e.dataTransfer.effectAllowed = 'move';
-                            }}
-                            onDragEnd={() => setSceneDragOverRole(null)}
-                            onDragOver={onSceneSlotDragOver}
-                            onDrop={onSceneSlotDrop}
-                            className="relative group aspect-square rounded-3xl overflow-hidden bg-zinc-900 border border-white/5 shadow-sm cursor-grab active:cursor-grabbing"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setFullscreenImage(src.data);
-                            }}
-                            title="Перетащите в другой слот"
-                          >
-                            <OptimizedImage src={src.data} alt="" className="w-full h-full object-cover pointer-events-none" referrerPolicy="no-referrer" priority draggable={false} />
-                            <div className="absolute top-2 left-2 p-1 rounded-lg bg-zinc-950/70 text-zinc-400 border border-white/10 pointer-events-none">
-                              <GripVertical className="w-3.5 h-3.5" aria-hidden />
-                            </div>
-                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
-                              <button 
-                                type="button"
-                                onClick={() => setSources((prev: any[]) => prev.filter(s => s.id !== src.id))}
-                                className="p-2 bg-red-500 text-white rounded-xl hover:scale-110 transition-transform shadow-md"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </motion.div>
-                        ) : (
-                          <button 
-                            type="button"
-                            onClick={e => {
-                              e.stopPropagation();
-                              onRequestSourceUploadForSlot(role);
-                            }}
-                            onDragOver={onSceneSlotDragOver}
-                            onDrop={onSceneSlotDrop}
-                            className={`aspect-square rounded-3xl border-2 border-dashed border-white/10 hover:border-indigo-500/50 hover:bg-white/5 transition-all flex flex-col items-center justify-center gap-2 text-zinc-500 hover:text-indigo-400 group ${isDragOver ? 'border-amber-500/50 bg-amber-500/5' : ''}`}
-                          >
-                            <Plus className="w-6 h-6" />
-                            <span className="text-[9px] font-black uppercase tracking-widest px-1">В слот</span>
-                          </button>
+                        <X size={16} />
+                      </button>
+                    </article>
+                  ),
+                )
+              : roles.map((role, index) => {
+                  const source = sources.find((s) => s.role === role);
+                  const over = dragRole === role;
+                  const drag = (e: React.DragEvent) => {
+                    if (
+                      Array.from(e.dataTransfer.types).includes(SCENE_DRAG_MIME)
+                    ) {
+                      e.preventDefault();
+                      setDragRole(role);
+                    }
+                  };
+                  const drop = (e: React.DragEvent) => {
+                    if (
+                      !Array.from(e.dataTransfer.types).includes(
+                        SCENE_DRAG_MIME,
+                      )
+                    )
+                      return;
+                    e.preventDefault();
+                    setDragRole(null);
+                    const from = e.dataTransfer.getData(
+                      SCENE_DRAG_MIME,
+                    ) as SceneRole;
+                    if (from && from !== role)
+                      setSources((all) => swap(all, from, role));
+                    onFocusedSceneSlotChange(role);
+                  };
+                  return (
+                    <article
+                      key={role}
+                      className={`studio-create__scene-slot ${focusedSceneSlot === role ? "is-focused" : ""} ${over ? "is-dragging" : ""}`}
+                      onDragOver={drag}
+                      onDrop={drop}
+                    >
+                      <div className="studio-create__slot-heading">
+                        <button
+                          type="button"
+                          onClick={() => onFocusedSceneSlotChange(role)}
+                        >
+                          {label(role)}
+                        </button>
+                        {source && (
+                          <span className="studio-create__slot-move">
+                            <button
+                              type="button"
+                              disabled={!index}
+                              onClick={() => move(role, -1)}
+                              aria-label={`Переместить ${label(role)} влево`}
+                            >
+                              ←
+                            </button>
+                            <button
+                              type="button"
+                              disabled={index === roles.length - 1}
+                              onClick={() => move(role, 1)}
+                              aria-label={`Переместить ${label(role)} вправо`}
+                            >
+                              →
+                            </button>
+                            <button
+                              type="button"
+                              className="studio-create__slot-remove"
+                              onClick={() => setSources((all) => all.filter((x) => x.id !== source.id))}
+                              aria-label={`Удалить ${label(role)}`}
+                            >
+                              <X size={16} />
+                            </button>
+                          </span>
                         )}
                       </div>
-                    );
-                  })}
-                </>
-              )}
-            </div>
-            <p className="text-[10px] text-zinc-500 text-center uppercase tracking-[0.3em] font-black">
-              {createLayoutMode === 'scene'
-                ? 'Клик — фокус; перетащите картинку между слотами; вставка и файлы — в выбранный или первый пустой'
-                : 'Перетащите сюда или Ctrl+V'}
-            </p>
-            <input 
-              type="file" 
-              ref={sourceInputRef} 
-              className="hidden" 
-              multiple={createLayoutMode === 'cover'}
-              accept="image/*" 
-              onChange={(e) => handleFileChange(e, 'source')} 
+                      {source ? (
+                        <>
+                          <button
+                            type="button"
+                            draggable
+                            className="studio-create__media-button"
+                            onDragStart={(e) =>
+                              e.dataTransfer.setData(SCENE_DRAG_MIME, role)
+                            }
+                            onDragEnd={() => setDragRole(null)}
+                            onClick={() => setFullscreenImage(source.data)}
+                            aria-label={`Открыть слот ${label(role)}`}
+                          >
+                            <OptimizedImage
+                              src={source.data}
+                              alt={`Слот ${label(role)}`}
+                              className="studio-create__image"
+                              referrerPolicy="no-referrer"
+                              priority
+                              draggable={false}
+                            />
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="studio-create__add-source"
+                          onClick={() => onRequestSourceUploadForSlot(role)}
+                        >
+                          <Plus size={18} />
+                          Добавить
+                        </button>
+                      )}
+                    </article>
+                  );
+                })}
+            {createLayoutMode === "cover" && sources.length < 4 && (
+              <button
+                type="button"
+                className="studio-create__add-source"
+                onClick={() => sourceInputRef.current?.click()}
+              >
+                <Plus size={18} />
+                Добавить
+              </button>
+            )}
+          </div>
+          <p className="studio-create__helper">
+            {createLayoutMode === "scene"
+              ? "Выберите роль, затем загрузите файл. Перетаскивайте или меняйте слот кнопками."
+              : "Перетащите файл сюда, вставьте из буфера или добавьте изображение."}
+          </p>
+          <input
+            ref={sourceInputRef}
+            type="file"
+            hidden
+            multiple={createLayoutMode === "cover"}
+            accept="image/*"
+            onChange={(e) => handleFileChange(e, "source")}
+          />
+        </section>
+        <section
+          className="studio-create__section studio-create__reference-section"
+          aria-labelledby="create-reference-title"
+        >
+          <div className="studio-create__section-heading">
+            <h2 id="create-reference-title">Референс композиции</h2>
+            <span>Необязательно</span>
+          </div>
+          <div
+            className={
+              isDraggingRef
+                ? "studio-create__reference-drop is-dragging"
+                : "studio-create__reference-drop"
+            }
+            onDragOver={handleDragOverRef}
+            onDragLeave={handleDragLeaveRef}
+            onDrop={handleDropRef}
+            onPaste={(e) => handleLocalPaste(e, "reference")}
+            tabIndex={0}
+            aria-label="Загрузить референс перетаскиванием или вставкой"
+          >
+            <ReferencePicker
+              reference={reference}
+              entries={userReferenceLibrary}
+              onSelect={selectReferenceFromLibrary}
+              onUpload={() => refInputRef.current?.click()}
+              onClear={() => setReference(null)}
+              onPreview={setFullscreenImage}
             />
-          </section>
-
-          {/* Reference Composition */}
-          <section className="cover-panel cover-reference-panel space-y-6">
-            <h2 className="text-xs font-black uppercase tracking-[0.2em] text-zinc-500 flex items-center gap-2">
-              <Layout className="w-4 h-4" />
-              Референс композиции
-            </h2>
-            <div 
-              onDragOver={handleDragOverRef}
-              onDragLeave={handleDragLeaveRef}
-              onDrop={handleDropRef}
-              onPaste={(e) => handleLocalPaste(e, 'reference')}
-              tabIndex={0}
-              className={`space-y-4 p-3 rounded-[2.5rem] transition-all outline-none focus:ring-2 focus:ring-indigo-500/50 ${isDraggingRef ? 'bg-indigo-500/10 border-2 border-dashed border-indigo-500/50 scale-[1.02]' : 'bg-transparent border-2 border-transparent'}`}
-            >
-              {reference ? (
-                <div 
-                  className="relative group aspect-video rounded-3xl overflow-hidden bg-zinc-900 border border-white/5 shadow-md cursor-pointer"
-                  onClick={() => setFullscreenImage(reference.data)}
-                >
-                  <OptimizedImage src={reference.data} alt="Reference" className="w-full h-full object-cover" referrerPolicy="no-referrer" priority />
-                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
-                    <button 
-                      onClick={() => setReference(null)}
-                      className="p-3 bg-red-500 text-white rounded-2xl hover:scale-110 transition-transform shadow-md"
-                    >
-                      <X className="w-5 h-5" />
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {userReferenceLibrary.length > 0 && (
-                    <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600">Мои референсы</p>
-                  )}
-                  <div className="grid grid-cols-5 gap-3">
-                    {userReferenceLibrary.map((entry) => (
-                      <button
-                        key={entry.id}
-                        type="button"
-                        onClick={() => selectReferenceFromLibrary(entry)}
-                        className="aspect-square rounded-xl overflow-hidden border border-indigo-500/30 hover:border-indigo-500/60 transition-all group relative shadow-sm"
-                        title={entry.name}
-                      >
-                        <OptimizedImage src={entry.storageUrl} alt={entry.name} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => refInputRef.current?.click()}
-                      className="aspect-square rounded-xl border border-dashed border-white/10 flex items-center justify-center text-zinc-500 hover:text-indigo-400 hover:border-indigo-500/50 bg-white/5 self-stretch min-h-0"
-                    >
-                      <Upload className="w-5 h-5 shrink-0" />
-                    </button>
-                  </div>
-                </div>
-              )}
-              <p className="text-[10px] text-zinc-500 text-center uppercase tracking-[0.3em] font-black">
-                Перетащите или Ctrl+V референс
-              </p>
-            </div>
-            <input 
-              type="file" 
-              ref={refInputRef} 
-              className="hidden" 
-              accept="image/*" 
-              onChange={(e) => handleFileChange(e, 'reference')} 
+          </div>
+          <input
+            ref={refInputRef}
+            type="file"
+            hidden
+            accept="image/*"
+            aria-label="Файл референса"
+            onChange={(e) => handleFileChange(e, "reference")}
+          />
+        </section>
+        <section
+          className="studio-create__section"
+          aria-labelledby="create-settings"
+        >
+          <div className="studio-create__section-heading">
+            <h2 id="create-settings">Параметры</h2>
+          </div>
+          <label className="studio-create__field">
+            <span id="create-prompt-label">
+              {baseImage ? "Инструкции по доработке" : "Промпт"}
+            </span>
+            <textarea
+              aria-labelledby="create-prompt-label"
+              ref={promptRef}
+              value={settings.prompt}
+              onChange={(e) =>
+                setSettings((s: any) => ({ ...s, prompt: e.target.value }))
+              }
+              placeholder={
+                baseImage
+                  ? "Опишите, что изменить или добавить"
+                  : "Опишите будущую обложку"
+              }
             />
-          </section>
-
-          {/* Settings */}
-          <section className="cover-panel cover-settings-panel space-y-8 bg-zinc-900/50 p-8 rounded-[2.5rem] border border-white/5 shadow-sm">
-            <h2 className="text-xs font-black uppercase tracking-[0.2em] text-zinc-500 flex items-center gap-2">
-              <Settings className="w-4 h-4" />
-              Настройки
-            </h2>
-            
-            <div className="space-y-6">
-              <div className="space-y-3">
-                <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Модель</label>
-                <div className="flex flex-col gap-2">
-                  {GENERATION_MODELS.map(m => (
-                    <button
-                      key={m.id}
-                      onClick={() => setSettings((s: any) => ({
-                        ...s,
-                        model: m.id,
-                        imageSize: (MODELS_NO_512PX.has(m.id) && s.imageSize === "512px") ? "1K" : s.imageSize
-                      }))}
-                      className={`px-4 py-3 rounded-2xl text-xs font-bold transition-all text-left border ${settings.model === m.id ? 'bg-white border-white text-zinc-950 shadow-md' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
-                    >
-                      {m.name} <span className="font-normal opacity-60">— {m.desc}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Формат</label>
-                <div className="flex flex-wrap gap-2">
-                  {ASPECT_RATIOS.map(ratio => (
-                    <button 
-                      key={ratio}
-                      onClick={() => setSettings((s: any) => ({ ...s, aspectRatio: ratio as any }))}
-                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border ${settings.aspectRatio === ratio ? 'bg-white border-white text-zinc-950 shadow-md' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
-                    >
-                      {ratio}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Разрешение</label>
-                <div className="flex flex-wrap gap-2">
-                  {RESOLUTIONS.map(res => {
-                    const isDisabled = MODELS_NO_512PX.has(settings.model) && res === "512px";
-                    return (
-                      <button 
-                        key={res}
-                        disabled={isDisabled}
-                        onClick={() => setSettings((s: any) => ({ ...s, imageSize: res as any }))}
-                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border ${isDisabled ? 'opacity-40 cursor-not-allowed bg-white/5 border-white/5 text-zinc-600' : settings.imageSize === res ? 'bg-white border-white text-zinc-950 shadow-md' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
-                      >
-                        {res}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                  {baseImage ? "Инструкции по доработке" : "Промпт (необязательно)"}
-                </label>
-                {baseImage && (
-                  <div 
-                    className="relative group aspect-video rounded-2xl overflow-hidden bg-zinc-900 border border-indigo-500/30 mb-3 shadow-md cursor-pointer"
-                    onClick={() => setFullscreenImage(baseImage.data)}
+          </label>
+          {baseImage && (
+            <div className="studio-create__base">
+              <button
+                type="button"
+                onClick={() => setFullscreenImage(baseImage.data)}
+              >
+                <OptimizedImage
+                  src={baseImage.data}
+                  alt="Основа для доработки"
+                  className="studio-create__image"
+                />
+              </button>
+              <span>Доработка изображения</span>
+              <button
+                type="button"
+                onClick={() => setBaseImage(null)}
+                aria-label="Убрать основу"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          <div className="studio-create__model">
+            <ModelPicker options={generationModelOptions} value={settings.model} disabled={isGenerating || isUpscaling} openRouterEnabled={openRouterEnabled}
+              onChange={model => setSettings((s: any) => {
+                const normalized = normalizeOpenRouterSettings(model, s.imageSize, s.aspectRatio);
+                return {
+                  ...s,
+                  model,
+                  ...normalized,
+                  imageSize: MODELS_NO_512PX.has(model) && normalized.imageSize === "512px" ? "1K" : normalized.imageSize,
+                };
+              })}
+            />
+          </div>
+          {settings.model === 'gpt-image-2' && <ChatGptImageNotice />}
+          {isOpenRouterImageModel(settings.model) && <OpenRouterImageNotice modelId={settings.model} />}
+          <div className="studio-create__choice-row">
+            <label className="studio-create__field">
+              <span>Формат</span>
+              <select
+                value={settings.aspectRatio}
+                onChange={(e) =>
+                  setSettings((value: any) => ({
+                    ...value,
+                    aspectRatio: e.target.value,
+                  }))
+                }
+              >
+                {ASPECT_RATIOS.map((ratio) => (
+                  <option key={ratio} value={ratio} disabled={Boolean(openRouterModel && openRouterModel.aspectRatios.length > 0 && !(openRouterModel.aspectRatios as readonly string[]).includes(ratio))}>
+                    {ratio}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="studio-create__field">
+              <span>Размер</span>
+              <select
+                value={automaticImageSize ? 'auto' : settings.imageSize}
+                disabled={automaticImageSize}
+                onChange={(e) =>
+                  setSettings((value: any) => ({
+                    ...value,
+                    imageSize: e.target.value,
+                  }))
+                }
+              >
+                {automaticImageSize && <option value="auto">Автоматически</option>}
+                {RESOLUTIONS.map((resolution) => (
+                  <option
+                    key={resolution}
+                    value={resolution}
+                    disabled={
+                      resolution === "512px" && MODELS_NO_512PX.has(settings.model)
+                      || Boolean(openRouterModel && openRouterModel.resolutions.length > 0 && !(openRouterModel.resolutions as readonly string[]).includes(resolution))
+                    }
                   >
-                    <OptimizedImage src={baseImage.data} alt="Base" className="w-full h-full object-cover" referrerPolicy="no-referrer" priority />
-                    <div className="absolute inset-0 bg-zinc-950/60 flex items-center justify-center pointer-events-none">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-indigo-400 bg-zinc-900/90 px-3 py-1.5 rounded-xl border border-indigo-500/20 shadow-sm">Доработка этого фото</span>
-                    </div>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); setBaseImage(null); }}
-                      className="absolute top-3 right-3 p-2 bg-red-500 text-white rounded-xl hover:scale-110 transition-transform shadow-md z-10"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-                <textarea 
-                  ref={promptRef}
-                  value={settings.prompt}
-                  onChange={(e) => setSettings((s: any) => ({ ...s, prompt: e.target.value }))}
-                  placeholder={baseImage ? "Опишите, что изменить или добавить..." : "напр. Кинематографичное освещение, стиль фэнтези..."}
-                  className="w-full bg-zinc-900/50 border border-white/5 rounded-2xl p-4 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500/30 min-h-[100px] resize-none transition-all shadow-inner"
-                />
-              </div>
-
-              <div className="space-y-3">
-                <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Отрицательный промпт</label>
-                <input 
-                  type="text"
+                    {resolution}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {MODELS_NO_512PX.has(settings.model) && (
+            <p className="studio-create__helper">
+              Эта модель поддерживает разрешение от 1K.
+            </p>
+          )}
+          <label className="studio-create__field">
+            <span>Варианты: {settings.batchSize}</span>
+            <input
+              type="range"
+              min="1"
+              max="4"
+              value={settings.batchSize}
+              onChange={(e) =>
+                setSettings((s: any) => ({
+                  ...s,
+                  batchSize: Number(e.target.value),
+                }))
+              }
+            />
+          </label>
+          <button
+            type="button"
+            className="studio-create__advanced-toggle"
+            aria-expanded={advanced}
+            onClick={() => setAdvanced((x) => !x)}
+          >
+            <Settings size={16} />
+            Дополнительно{" "}
+            {(settings.strictMode || settings.negativePrompt) && (
+              <small title="Дополнительные параметры включены">Вкл.</small>
+            )}
+            <span>{advanced ? "−" : "+"}</span>
+          </button>
+          {advanced && (
+            <div className="studio-create__advanced">
+              {onOpenSettings && (
+                <Button variant="ghost" onClick={onOpenSettings}>
+                  Системный промпт
+                </Button>
+              )}
+              <label className="studio-create__field">
+                <span>Отрицательный промпт</span>
+                <input
                   value={settings.negativePrompt}
-                  onChange={(e) => setSettings((s: any) => ({ ...s, negativePrompt: e.target.value }))}
-                  placeholder="напр. текст, логотип, размытость"
-                  className="w-full bg-zinc-900/50 border border-white/5 rounded-2xl p-4 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500/30 transition-all shadow-inner"
+                  onChange={(e) =>
+                    setSettings((s: any) => ({
+                      ...s,
+                      negativePrompt: e.target.value,
+                    }))
+                  }
+                  placeholder="Например, текст или размытость"
                 />
-              </div>
-
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Вариантов: {settings.batchSize}</label>
-                  </div>
-                  <input 
-                    type="range" 
-                    min="1" 
-                    max="4" 
-                    value={settings.batchSize}
-                    onChange={(e) => setSettings((s: any) => ({ ...s, batchSize: parseInt(e.target.value) }))}
-                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+              </label>
+              <label className="studio-create__switch">
+                <span>
+                  <strong>Максимальная точность</strong>
+                  <small>Проверить исходники и результат.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={settings.model !== 'gpt-image-2' && settings.strictMode}
+                  disabled={settings.model === 'gpt-image-2'}
+                  onChange={() =>
+                    setSettings((s: any) => ({
+                      ...s,
+                      strictMode: !s.strictMode,
+                    }))
+                  }
+                />
+              </label>
+            </div>
+          )}
+        </section>
+        <div className="studio-create__rail-footer">
+          {reason && (
+            <p className="studio-create__disabled-reason" role="status">
+              {reason}{" "}
+              {availability === "unavailable" && onRetryAvailability && (
+                <button type="button" onClick={onRetryAvailability}>
+                  Повторить
+                </button>
+              )}
+            </p>
+          )}
+          <button
+            type="button"
+            className="studio-create__generate"
+            disabled={!!reason || isGenerating}
+            onClick={() => void handleGenerate()}
+          >
+            {isGenerating ? (
+              <Loader2 size={18} className="studio-create__spin" />
+            ) : (
+              <ImageIcon size={18} />
+            )}
+            {isGenerating
+              ? "Создаём варианты"
+              : `Создать ${settings.batchSize} ${settings.batchSize === 1 ? "вариант" : "варианта"}`}
+          </button>
+        </div>
+      </div>
+      <section
+        className="studio-create__canvas"
+        aria-labelledby="create-results"
+      >
+        <div className="studio-create__canvas-heading">
+          <h2 id="create-results">Результаты</h2>
+          {isGenerating &&
+            generationProgress?.phase === "generating" &&
+            generationProgress.total > 1 && (
+              <span>
+                {generationProgress.done}/{generationProgress.total}
+              </span>
+            )}
+        </div>
+        <details className="studio-create__deck">
+          <summary>Импорт колоды и библиотека артов</summary>
+          <div className="legacy-cover-ui">
+            <DeckImportSection
+              cardLibrary={cardLibrary}
+              sources={sources}
+              onAddSource={onAddCardSource}
+              onRemoveSource={onRemoveCardSource}
+              createLayoutMode={createLayoutMode}
+              scenePlan={scenePlan}
+            />
+          </div>
+        </details>
+        {generationNotice && (
+          <p className="studio-create__notice" role="status">
+            {generationNotice}
+          </p>
+        )}
+        {saveWarning && (
+          <p
+            className="studio-create__notice studio-create__notice--warning"
+            role="status"
+          >
+            {saveWarning}
+          </p>
+        )}
+        {error && (
+          <p
+            className="studio-create__notice studio-create__notice--error"
+            role="alert"
+          >
+            {error}
+          </p>
+        )}
+        {isUpscaling && (
+          <p className="studio-create__notice" role="status">
+            Увеличиваем разрешение. Исходный результат доступен для просмотра и
+            скачивания.
+          </p>
+        )}
+        {isGenerating && (
+          <GenerationStage
+            progress={generationProgress}
+            sources={sources}
+            aspectRatio={settings.aspectRatio}
+            modelName={openRouterModel?.name || settings.model}
+            onCancel={onCancelGeneration}
+          />
+        )}
+        {results.length ? (
+          <div
+            className={`studio-create__results studio-create__results--${Math.min(results.length, 4)}`}
+          >
+            <AnimatePresence mode="popLayout">
+            {results.map((url, index) => (
+              <motion.article
+                className="studio-create__result"
+                key={url}
+                data-result-reveal="true"
+                layout
+                initial={{ opacity: 0, y: 10, scale: 0.99 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.99 }}
+                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <button
+                  type="button"
+                  className="studio-create__result-image"
+                  style={{ aspectRatio: String(settings.aspectRatio).replace(':', ' / ') }}
+                  onClick={() => setFullscreenImage(url)}
+                  aria-label={`Открыть вариант ${index + 1}`}
+                >
+                  <OptimizedImage
+                    src={url}
+                    alt={`Вариант ${index + 1}`}
+                    className="studio-create__image"
+                    referrerPolicy="no-referrer"
                   />
-                </div>
-
-                <div className="flex items-center justify-between gap-4 p-4 bg-zinc-900/50 rounded-2xl border border-white/5">
-                  <div className="space-y-1 min-w-0 flex-1">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-300">Максимальная точность</label>
-                    <p className="text-[10px] text-zinc-500">
-                      Анализ исходников (vision), жёсткий промпт и проверка результата; при провале — одна доработка (Nano Banana 2)
-                    </p>
-                  </div>
+                  <span className="studio-create__result-label">Вариант {index + 1}</span>
+                </button>
+                <div className="studio-create__result-actions">
+                  <button type="button" onClick={() => download(url, index)}>
+                    <Download size={16} />
+                    Скачать
+                  </button>
                   <button
                     type="button"
-                    role="switch"
-                    aria-checked={settings.strictMode}
-                    onClick={() => setSettings((s: any) => ({ ...s, strictMode: !s.strictMode }))}
-                    className={`relative inline-flex h-8 w-[52px] shrink-0 cursor-pointer items-center rounded-full border border-white/10 p-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/60 ${settings.strictMode ? 'bg-indigo-600' : 'bg-zinc-700'}`}
+                    aria-pressed={likedSet.has(url)}
+                    disabled={isGenerating}
+                    onClick={() => void toggleLike(url)}
                   >
-                    <span
-                      className={`pointer-events-none block h-6 w-6 rounded-full bg-white shadow-md transition-transform duration-200 ease-out ${settings.strictMode ? 'translate-x-5' : 'translate-x-0'}`}
+                    <Heart
+                      size={16}
+                      fill={likedSet.has(url) ? "currentColor" : "none"}
                     />
+                    В избранное
                   </button>
-                </div>
-
-              </div>
-          </section>
-        </div>
-
-        {/* Right Column: Results */}
-        <div className="cover-create-output lg:col-span-8 space-y-6">
-          {/* Deck Import */}
-          <DeckImportSection
-            cardLibrary={cardLibrary}
-            sources={sources}
-            onAddSource={onAddCardSource}
-            onRemoveSource={onRemoveCardSource}
-            createLayoutMode={createLayoutMode}
-            scenePlan={scenePlan}
-          />
-
-          <AnimatePresence mode="wait">
-            {isGenerating ? (
-              <motion.div
-                key="loading"
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.05 }}
-                className="cover-result-state bg-zinc-900/50 rounded-[3rem] border border-white/5 min-h-[600px] flex items-center justify-center shadow-sm"
-              >
-                <div className="flex flex-col items-center gap-8 text-center p-10">
-                  <div className="relative">
-                    <motion.div
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                      className="w-32 h-32 border-4 border-indigo-500/10 border-t-indigo-500 rounded-full"
-                    />
-                    <Sparkles className="w-10 h-10 text-indigo-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
-                  </div>
-                  <div className="space-y-3 w-full max-w-md mx-auto">
-                    <h3 className="text-3xl font-black tracking-tighter text-white">Создаем шедевр...</h3>
-                    {generationProgress && (
-                      <p className="text-indigo-400/90 text-[11px] font-black uppercase tracking-widest">
-                        {generationProgress.phase === 'preparing' && 'Подготовка — анализ исходников'}
-                        {generationProgress.phase === 'generating' && 'Генерация изображений'}
-                        {generationProgress.phase === 'strict' && 'Строгий режим — проверка качества'}
-                      </p>
-                    )}
-                    {generationProgress && (
-                      <div className="relative w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
-                        {generationProgress.phase === 'preparing' || generationProgress.phase === 'strict' ? (
-                          <motion.div
-                            className="absolute top-0 bottom-0 w-[40%] rounded-full bg-gradient-to-r from-indigo-600 to-violet-500"
-                            initial={{ left: '-40%' }}
-                            animate={{ left: ['-40%', '100%'] }}
-                            transition={{ duration: 1.15, repeat: Infinity, ease: 'linear' }}
-                          />
-                        ) : (
-                          <motion.div
-                            className="absolute top-0 left-0 bottom-0 rounded-full bg-gradient-to-r from-indigo-600 to-violet-500"
-                            initial={{ width: '0%' }}
-                            animate={{
-                              width: `${Math.min(
-                                100,
-                                (generationProgress.done / Math.max(1, generationProgress.total)) * 100
-                              )}%`,
-                            }}
-                            transition={{ ease: 'easeOut', duration: 0.35 }}
-                          />
-                        )}
-                      </div>
-                    )}
-                    {generationProgress && generationProgress.phase === 'generating' && generationProgress.total > 1 ? (
-                      <p className="text-zinc-400 text-sm font-bold">
-                        {generationProgress.done} / {generationProgress.total} вариантов готово
-                      </p>
-                    ) : generationProgress && generationProgress.phase === 'generating' && generationProgress.total === 1 ? (
-                      <p className="text-zinc-500 text-sm">Почти готово…</p>
-                    ) : generationProgress && generationProgress.phase === 'preparing' ? (
-                      <p className="text-zinc-500 text-sm max-w-sm mx-auto">
-                        Анализируем цвета, объекты и композицию для вашей уникальной обложки.
-                      </p>
-                    ) : generationProgress && generationProgress.phase === 'strict' ? (
-                      <p className="text-zinc-500 text-sm max-w-sm mx-auto">
-                        Автоматическая проверка и при необходимости доработка кадра.
-                      </p>
-                    ) : (
-                      <p className="text-zinc-500 text-lg max-w-sm mx-auto">
-                        Анализируем цвета, объекты и композицию для вашей уникальной обложки.
-                      </p>
-                    )}
-                  </div>
+                  <button type="button" onClick={() => setFullscreenImage(url)}>
+                    <Expand size={16} />
+                    Открыть
+                  </button>
                   <button
-                    onClick={onCancelGeneration}
-                    className="px-6 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-sm font-bold transition-all border border-white/10"
+                    type="button"
+                    onClick={() => void handleUpscale(url)}
+                    disabled={
+                      isUpscaling ||
+                      isGenerating ||
+                      availability !== "available"
+                    }
                   >
-                    Отмена
+                    <Maximize2 size={16} />
+                    Апскейл
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isGenerating || isUpscaling}
+                    onClick={() => refine(url)}
+                  >
+                    Доработать
                   </button>
                 </div>
-              </motion.div>
-            ) : results.length > 0 ? (
-              <motion.div
-                key="results"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="relative"
-              >
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {results.map((url, i) => (
-                    <ResultCard
-                      key={i}
-                      url={url}
-                      isLiked={likedSet.has(url)}
-                      onToggleLike={toggleLike}
-                      onUpscale={handleUpscale}
-                      onFullscreen={setFullscreenImage}
-                      onRefine={(url) => {
-                        setBaseImage({ data: url, mimeType: 'image/png' });
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                        setTimeout(() => promptRef.current?.focus(), 100);
-                      }}
-                      onDownload={(url) => {
-                        const link = document.createElement('a');
-                        link.href = url;
-                        link.download = `cover-${i}.png`;
-                        link.click();
-                      }}
-                    />
-                  ))}
-                </div>
-
-                {isUpscaling && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="absolute inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-6 rounded-[2rem]"
-                  >
-                    <div className="relative">
-                      <motion.div
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                        className="w-24 h-24 border-4 border-indigo-500/10 border-t-indigo-500 rounded-full"
-                      />
-                      <Maximize2 className="w-8 h-8 text-indigo-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
-                    </div>
-                    <div className="text-center space-y-2">
-                      <h3 className="text-xl font-black text-white uppercase tracking-tighter">Улучшаем качество...</h3>
-                      <p className="text-zinc-400 text-sm">Масштабируем изображение до 4K с ИИ</p>
-                    </div>
-                  </motion.div>
-                )}
-              </motion.div>
-            ) : (
-              <motion.div
-                key="empty"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="cover-result-state cover-result-empty bg-zinc-900/50 rounded-[3rem] border border-white/5 min-h-[600px] flex items-center justify-center shadow-sm"
-              >
-                <div className="flex flex-col items-center gap-8 text-center p-10">
-                  <div className="w-24 h-24 bg-zinc-900 rounded-[2rem] flex items-center justify-center border border-white/5 shadow-inner">
-                    <ImageIcon className="w-12 h-12 text-zinc-800" />
-                  </div>
-                  <div className="space-y-3">
-                    <h3 className="text-3xl font-black tracking-tighter text-zinc-700">Готов к созданию</h3>
-                    <p className="text-zinc-500 text-lg max-w-xs">Загрузите 2-4 изображения и нажмите «Создать», чтобы увидеть магию.</p>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <AnimatePresence>
-            {error && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 10 }}
-                className="p-5 bg-red-500/10 border border-red-500/20 rounded-[2rem] text-red-500 text-sm flex items-center gap-4 shadow-sm"
-              >
-                <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.5)]" />
-                <span className="font-bold">{error}</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Tips */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {[
-              { title: "Связность", desc: "Используйте фото с похожим светом для лучшего результата." },
-              { title: "Композиция", desc: "Загрузите референс, чтобы направить макет ИИ." },
-              { title: "Качество", desc: "Высокое разрешение требует больше времени, но выглядит четче." }
-            ].map((tip, i) => (
-              <div key={i} className="p-6 rounded-[2rem] bg-zinc-900/50 border border-white/5 shadow-sm hover:shadow-md transition-all">
-                <h4 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">{tip.title}</h4>
-                <p className="text-xs text-zinc-500 leading-relaxed font-medium">{tip.desc}</p>
-              </div>
+              </motion.article>
             ))}
+            </AnimatePresence>
           </div>
-        </div>
+        ) : !isGenerating ? (
+          <div className="studio-create__empty">
+            <ImageIcon size={28} />
+            <p>
+              {reason ??
+                "Всё готово к созданию. Запустите генерацию, чтобы увидеть варианты."}
+            </p>
+            <small>Выбранный формат: {settings.aspectRatio}</small>
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 };

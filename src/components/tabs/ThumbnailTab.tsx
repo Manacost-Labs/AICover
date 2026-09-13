@@ -1,4 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ProviderModelPicker as ModelPicker, ChatGptImageNotice, useChatGpt } from '../ui/ChatGptConnection';
+import { thumbnailModelOptions } from '../../features/models/options';
+import '../../styles/thumbnail.css';
 import {
   Check,
   Download,
@@ -68,7 +71,10 @@ function readUpload(file: File): Promise<ThumbnailAsset> {
 }
 
 export const ThumbnailTab: React.FC = () => {
+  const chatGpt = useChatGpt();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const generationAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => generationAbort.current?.abort(), []);
   const uploadRef = useRef<HTMLInputElement>(null);
   const [generation, setGeneration] = useState(DEFAULT_GENERATION);
   const [text, setText] = useState(DEFAULT_TEXT);
@@ -147,11 +153,14 @@ export const ThumbnailTab: React.FC = () => {
   };
 
   const generate = async () => {
+    if (isGenerating) return;
     if (!selectedAssets.length) {
       setError('Сначала выберите или загрузите хотя бы один арт');
       return;
     }
     setIsGenerating(true);
+    const controller = new AbortController();
+    generationAbort.current = controller;
     setError(null);
     setProgress({ done: 0, total: generation.batchSize });
     try {
@@ -159,11 +168,13 @@ export const ThumbnailTab: React.FC = () => {
         selectedAssets,
         generation,
         (done, total) => setProgress({ done, total }),
+        controller.signal,
       );
+      if (controller.signal.aborted) return;
       setBackgrounds(results);
       setSelectedBackground(0);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Генерация не удалась');
+      setError(controller.signal.aborted ? 'Ожидание остановлено. Следующие варианты не отправлены; уже принятый запрос может завершиться в ChatGPT.' : cause instanceof Error ? cause.message : 'Генерация не удалась');
     } finally {
       setIsGenerating(false);
     }
@@ -183,20 +194,20 @@ export const ThumbnailTab: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8 pb-20">
+    <div className="studio-thumbnail space-y-8 pb-20">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="text-4xl font-black tracking-tighter text-white sm:text-5xl">HS-обложка</h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">
-            Gemini создаёт яркий арт без букв, а редактор накладывает точный русский заголовок и деревянную рамку.
+            Выбранная модель создаёт арт без букв, а редактор накладывает точный русский заголовок и рамку.
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {isGenerating && generation.model === 'gpt-image-2' && <button type="button" className="studio-button" onClick={() => generationAbort.current?.abort()}>Остановить GPT</button>}
           <button
             type="button"
             onClick={generate}
-            disabled={isGenerating || selectedAssets.length === 0}
-            className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-fuchsia-500 to-violet-600 px-6 py-3 text-sm font-black text-white shadow-xl shadow-violet-600/20 transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={isGenerating || selectedAssets.length === 0 || generation.model === 'gpt-image-2' && !chatGpt.connected}
+            className="studio-button studio-button--primary"
           >
             {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
             {isGenerating ? `${progress.done}/${progress.total}` : 'Создать фон'}
@@ -205,7 +216,7 @@ export const ThumbnailTab: React.FC = () => {
             type="button"
             onClick={download}
             disabled={!backgroundUrl}
-            className="flex items-center gap-2 rounded-2xl bg-white px-6 py-3 text-sm font-black text-zinc-950 transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40"
+            className="studio-button"
           >
             <Download className="h-4 w-4" />
             PNG 1920×1080
@@ -217,37 +228,21 @@ export const ThumbnailTab: React.FC = () => {
         <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-5 py-4 text-sm font-medium text-red-300">{error}</div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
-        <aside className="space-y-5">
-          <section className="rounded-3xl border border-white/10 bg-zinc-900/70 p-5">
-            <div className="mb-4 flex items-center gap-2 text-sm font-black text-white">
-              <Sparkles className="h-4 w-4 text-violet-400" /> Модель Gemini
-            </div>
-            <div className="space-y-2">
-              {THUMBNAIL_MODELS.map((model) => (
-                <button
-                  type="button"
-                  key={model.id}
-                  onClick={() => handleModelChange(model.id)}
-                  className={`w-full rounded-2xl border p-3 text-left transition ${generation.model === model.id ? 'border-violet-400/50 bg-violet-500/15' : 'border-white/5 bg-zinc-950/50 hover:border-white/15'}`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-black text-white">{model.name}</span>
-                    <span className="text-[10px] font-black uppercase tracking-wider text-violet-300">{model.badge}</span>
-                  </div>
-                  <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">{model.description}</p>
-                </button>
-              ))}
-            </div>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
+        <aside className="min-w-0 space-y-5">
+          <section className="studio-thumbnail__model-section">
+            <ModelPicker options={thumbnailModelOptions} value={generation.model} onChange={handleModelChange} disabled={isGenerating} />
+            {generation.model === 'gpt-image-2' && <ChatGptImageNotice />}
             <div className="mt-4 grid grid-cols-2 gap-3">
               <label className="text-[10px] font-black uppercase tracking-wider text-zinc-500">
                 Разрешение
                 <select
-                  value={generation.imageSize}
-                  disabled={generation.model.includes('lite') || generation.model.includes('2.5')}
+                  value={generation.model === 'gpt-image-2' ? 'auto' : generation.imageSize}
+                  disabled={generation.model === 'gpt-image-2' || generation.model.includes('lite') || generation.model.includes('2.5')}
                   onChange={(event) => setGeneration((current) => ({ ...current, imageSize: event.target.value as ThumbnailGenerationSettings['imageSize'] }))}
                   className="mt-2 w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2 text-xs text-white outline-none disabled:opacity-50"
                 >
+                  {generation.model === 'gpt-image-2' && <option value="auto">Автоматически</option>}
                   <option value="1K">1K</option><option value="2K">2K</option><option value="4K">4K</option>
                 </select>
               </label>
@@ -264,8 +259,8 @@ export const ThumbnailTab: React.FC = () => {
             </div>
           </section>
 
-          <section className="rounded-3xl border border-white/10 bg-zinc-900/70 p-5">
-            <div className="mb-4 flex items-center gap-2 text-sm font-black text-white">
+          <section className="studio-thumbnail__surface">
+            <div className="studio-thumbnail__section-title">
               <Palette className="h-4 w-4 text-fuchsia-400" /> Композиция
             </div>
             <div className="grid grid-cols-3 gap-2">
@@ -275,7 +270,8 @@ export const ThumbnailTab: React.FC = () => {
                   key={layout.id}
                   onClick={() => setGeneration((current) => ({ ...current, layout: layout.id }))}
                   title={layout.description}
-                  className={`rounded-xl border px-2 py-3 text-[11px] font-bold transition ${generation.layout === layout.id ? 'border-fuchsia-400/50 bg-fuchsia-500/15 text-white' : 'border-white/5 bg-zinc-950/50 text-zinc-500 hover:text-white'}`}
+                  aria-pressed={generation.layout === layout.id}
+                  className="studio-thumbnail__layout-option"
                 >{layout.name}</button>
               ))}
             </div>
@@ -288,9 +284,9 @@ export const ThumbnailTab: React.FC = () => {
             />
           </section>
 
-          <section className="rounded-3xl border border-white/10 bg-zinc-900/70 p-5">
+          <section className="studio-thumbnail__surface">
             <div className="mb-4 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-black text-white"><Gamepad2 className="h-4 w-4 text-emerald-400" /> Ассеты игры</div>
+              <div className="studio-thumbnail__section-title"><Gamepad2 className="h-4 w-4 text-emerald-400" /> Ассеты игры</div>
               <span className="text-[10px] font-bold text-zinc-500">{selectedAssets.length}/4</span>
             </div>
             <form onSubmit={runSearch} className="flex gap-2">
@@ -301,7 +297,7 @@ export const ThumbnailTab: React.FC = () => {
                 placeholder="Название карты или героя"
                 className="min-w-0 flex-1 rounded-xl border border-white/10 bg-zinc-950 px-3 py-2.5 text-xs text-white outline-none focus:border-emerald-500/40"
               />
-              <button type="submit" className="rounded-xl bg-emerald-500 p-2.5 text-black" aria-label="Найти ассеты">
+              <button type="submit" className="studio-button studio-button--primary" aria-label="Найти ассеты">
                 {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
               </button>
             </form>
@@ -328,7 +324,7 @@ export const ThumbnailTab: React.FC = () => {
             <button
               type="button"
               onClick={() => uploadRef.current?.click()}
-              className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/15 px-4 py-3 text-xs font-bold text-zinc-400 transition hover:border-white/30 hover:text-white"
+              className="studio-button mt-4 w-full"
             >
               <Upload className="h-4 w-4" /> Загрузить свои арты
             </button>
@@ -336,7 +332,7 @@ export const ThumbnailTab: React.FC = () => {
             {selectedAssets.length ? (
               <div className="mt-4 space-y-2">
                 {selectedAssets.map((asset, index) => (
-                  <div key={asset.id} className="flex items-center gap-3 rounded-xl bg-zinc-950/60 p-2">
+                  <div key={asset.id} className="studio-thumbnail__asset-row flex items-center gap-3 p-2">
                     <img src={asset.imageUrl} alt="" className="h-10 w-10 rounded-lg object-cover" referrerPolicy="no-referrer" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-xs font-bold text-white">{asset.name}</p>
@@ -351,12 +347,12 @@ export const ThumbnailTab: React.FC = () => {
         </aside>
 
         <div className="min-w-0 space-y-5">
-          <section className="overflow-hidden rounded-3xl border border-white/10 bg-zinc-900/60 p-3 shadow-2xl shadow-black/40">
-            <div className="relative aspect-video overflow-hidden rounded-2xl bg-[radial-gradient(circle_at_70%_30%,#45206b,#130c20_55%,#08080a)]">
+          <section className="studio-thumbnail__preview-surface">
+            <div className="studio-thumbnail__preview-canvas relative aspect-video overflow-hidden">
               <canvas ref={canvasRef} className={`h-full w-full ${backgroundUrl ? 'opacity-100' : 'opacity-0'}`} />
               {!backgroundUrl ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-center">
-                  <div className="rounded-3xl border border-white/10 bg-white/5 p-5"><ImagePlus className="h-10 w-10 text-zinc-600" /></div>
+                  <ImagePlus className="h-7 w-7 text-zinc-600" aria-hidden="true" />
                   <div><p className="font-black text-zinc-300">Выберите игровой арт</p><p className="mt-1 text-xs text-zinc-600">Он сразу появится в предпросмотре</p></div>
                 </div>
               ) : null}
@@ -373,9 +369,9 @@ export const ThumbnailTab: React.FC = () => {
             </div>
           ) : null}
 
-          <section className="grid gap-5 rounded-3xl border border-white/10 bg-zinc-900/70 p-5 lg:grid-cols-2">
+          <section className="studio-thumbnail__surface grid gap-5 lg:grid-cols-2">
             <div>
-              <div className="mb-4 flex items-center gap-2 text-sm font-black text-white"><Type className="h-4 w-4 text-yellow-300" /> Точный заголовок</div>
+              <div className="studio-thumbnail__section-title"><Type className="h-4 w-4 text-yellow-300" /> Точный заголовок</div>
               <textarea
                 aria-label="Точный заголовок обложки"
                 value={text.text}
@@ -399,7 +395,7 @@ export const ThumbnailTab: React.FC = () => {
             </div>
 
             <div className="space-y-4">
-              <div className="flex items-center gap-2 text-sm font-black text-white"><Frame className="h-4 w-4 text-amber-400" /> Оформление</div>
+              <div className="studio-thumbnail__section-title"><Frame className="h-4 w-4 text-amber-400" /> Оформление</div>
               <div className="grid grid-cols-2 gap-3">
                 <label className="rounded-xl border border-white/5 bg-zinc-950/60 p-3 text-[10px] font-black uppercase tracking-wider text-zinc-500">Основной цвет
                   <input type="color" value={text.primaryColor} onChange={(event) => setText((current) => ({ ...current, primaryColor: event.target.value }))} className="mt-2 h-9 w-full cursor-pointer rounded-lg bg-transparent" />
@@ -421,7 +417,8 @@ export const ThumbnailTab: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setFrameEnabled((value) => !value)}
-                className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-xs font-bold transition ${frameEnabled ? 'border-amber-400/40 bg-amber-500/10 text-amber-200' : 'border-white/10 text-zinc-500'}`}
+                aria-pressed={frameEnabled}
+                className="studio-thumbnail__frame-toggle"
               >
                 Деревянная рамка
                 <span className={`h-5 w-9 rounded-full p-0.5 ${frameEnabled ? 'bg-amber-400' : 'bg-zinc-700'}`}><span className={`block h-4 w-4 rounded-full bg-zinc-950 transition ${frameEnabled ? 'translate-x-4' : ''}`} /></span>

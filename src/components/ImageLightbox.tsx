@@ -61,6 +61,9 @@ export function ImageLightbox({
   useEffect(() => {
     clearCanvas();
     lastPointRef.current = null;
+    drawingRef.current = false;
+    setDrawMode(false);
+    setStrokeColor(MARKER_COLORS[0].stroke);
   }, [imageUrl, clearCanvas]);
 
   useEffect(() => {

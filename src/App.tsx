@@ -21,7 +21,12 @@ import {
   Moon,
   Sun,
 } from 'lucide-react';
-import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
+import { WorkspaceNavigation, workspaceTabs, type AppTab } from './components/layout/WorkspaceNavigation';
+import { Button } from './components/ui/Controls';
+import { ProviderModelPicker as ModelPicker, ChatGptImageNotice, OpenRouterImageNotice, useChatGpt } from './components/ui/ChatGptConnection';
+import { generationModelOptions } from './features/models/options';
+import { useImageTools } from './features/image-tools/useImageTools';
 import { get, set } from 'idb-keyval';
 import {
   generateFusedCover,
@@ -31,46 +36,31 @@ import {
   DEFAULT_SYSTEM_PROMPT_CREATE,
   DEFAULT_SYSTEM_PROMPT_EDIT,
   upscaleImage,
-  expandImage,
   analyzeReferenceCompositionVision,
   analyzeFavoriteChoiceVision,
-  analyzeFavoriteVideoChoiceVision,
   sceneRolesOrder,
   type SceneRole,
 } from './services/geminiService';
 import {
   loadCardLibrary, saveCardToLibrary, deleteCardFromLibrary,
   loadReferenceLibrary, saveReferenceToLibrary, deleteReferenceFromLibrary, updateReferenceVisionAnalysis, fetchUrlAsImageSource,
-  loadHistory, saveToHistory, clearHistory,
+  loadHistory, saveToHistory,
   loadFavorites, addToFavorites, removeFromFavorites,
   updateFavoriteChoiceAnalysis,
   loadFavoriteChoiceNotesMap,
-  loadVideoHistory,
-  saveVideoToHistory,
-  clearVideoHistory,
-  loadVideoFavorites,
-  addVideoToFavorites,
-  removeVideoFromFavorites,
-  updateVideoFavoriteChoiceAnalysis,
-  loadVideoFavoriteChoiceNotesMap,
   imageUrlToImageSource,
   type CardLibraryEntry,
   type ReferenceLibraryEntry,
 } from './services/serverStorageService';
-import { ASPECT_RATIOS, RESOLUTIONS, GENERATION_MODELS, MODELS_NO_512PX, VEO_DEFAULT_PROMPT } from './constants';
+import { ASPECT_RATIOS, RESOLUTIONS, MODELS_NO_512PX } from './constants';
+import { getOpenRouterModel, isOpenRouterImageModel, normalizeOpenRouterSettings } from './services/openRouterImages';
 import { ImageLightbox } from './components/ImageLightbox';
-import { VideoLightbox } from './components/VideoLightbox';
-import { generateVeoVideoFromImage, type VeoProgressUpdate } from './services/veoService';
-import { videoUrlToFirstFrameSource } from './lib/videoFrame';
 
 const CreateTab = React.lazy(() =>
   import('./components/tabs/CreateTab').then((m) => ({ default: m.CreateTab }))
 );
-const UpscaleTab = React.lazy(() =>
-  import('./components/tabs/UpscaleTab').then((m) => ({ default: m.UpscaleTab }))
-);
-const ExpandTab = React.lazy(() =>
-  import('./components/tabs/ExpandTab').then((m) => ({ default: m.ExpandTab }))
+const ImageToolsTab = React.lazy(() =>
+  import('./components/tabs/ImageToolsTab').then((m) => ({ default: m.ImageToolsTab }))
 );
 const HistoryTab = React.lazy(() =>
   import('./components/tabs/HistoryTab').then((m) => ({ default: m.HistoryTab }))
@@ -78,26 +68,13 @@ const HistoryTab = React.lazy(() =>
 const FavoritesTab = React.lazy(() =>
   import('./components/tabs/FavoritesTab').then((m) => ({ default: m.FavoritesTab }))
 );
-const LibraryTab = React.lazy(() =>
-  import('./components/tabs/LibraryTab').then((m) => ({ default: m.LibraryTab }))
-);
 const ReferencesTab = React.lazy(() =>
   import('./components/tabs/ReferencesTab').then((m) => ({ default: m.ReferencesTab }))
-);
-const VideoTab = React.lazy(() =>
-  import('./components/tabs/VideoTab').then((m) => ({ default: m.VideoTab }))
 );
 const ThumbnailTab = React.lazy(() =>
   import('./components/tabs/ThumbnailTab').then((m) => ({ default: m.ThumbnailTab }))
 );
 
-type AppTab = 'create' | 'thumbnail' | 'history' | 'favorites' | 'upscale' | 'expand' | 'video' | 'library' | 'references';
-
-const createWorkspaceMeta = {
-  eyebrow: 'Рабочая область',
-  title: 'Новая обложка',
-  description: 'Соберите исходники, задайте композицию и запустите генерацию.',
-};
 type Theme = 'light' | 'dark';
 
 const THEME_STORAGE_KEY = 'cover_theme';
@@ -186,15 +163,6 @@ export default function App() {
   );
 }
 
-interface UpscaleItem {
-  id: string;
-  originalUrl: string;
-  upscaledUrl?: string;
-  status: 'loading' | 'done' | 'error';
-  error?: string;
-  resolution?: string;
-}
-
 interface UISource extends ImageSource {
   id: string;
   role?: SceneRole;
@@ -210,6 +178,7 @@ function readFileAsDataURL(file: File): Promise<string> {
 }
 
 function AppContent() {
+  const chatGpt = useChatGpt();
   const [activeTab, setActiveTab] = useState<AppTab>('create');
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [thumbnailVisited, setThumbnailVisited] = useState(false);
@@ -239,44 +208,14 @@ function AppContent() {
   createLayoutModeRef.current = createLayoutMode;
   scenePlanRef.current = scenePlan;
   focusedSceneSlotRef.current = focusedSceneSlot;
-  const [upscaleSource, setUpscaleSource] = useState<ImageSource | null>(null);
-  const [expandSource, setExpandSource] = useState<ImageSource | null>(null);
-  const [upscaleResults, setUpscaleResults] = useState<UpscaleItem[]>([]);
-  const [expandResults, setExpandResults] = useState<UpscaleItem[]>([]);
   const sourcesRef = useRef<UISource[]>([]);
   
   const [likedImages, setLikedImages] = useState<string[]>([]);
   /** URL → JSON/text from Gemini: why this favorite vs batch siblings */
   const [favoriteChoiceNotes, setFavoriteChoiceNotes] = useState<Record<string, string>>({});
   const [favoriteAnalysisLoadingUrl, setFavoriteAnalysisLoadingUrl] = useState<string | null>(null);
-  const [likedVideos, setLikedVideos] = useState<string[]>([]);
-  const [videoFavoriteChoiceNotes, setVideoFavoriteChoiceNotes] = useState<Record<string, string>>({});
-  const [videoFavoriteAnalysisLoadingUrl, setVideoFavoriteAnalysisLoadingUrl] = useState<string | null>(null);
-  const [videoHistory, setVideoHistory] = useState<string[]>([]);
-  const [videoSource, setVideoSource] = useState<ImageSource | null>(null);
-  const [veoSettings, setVeoSettings] = useState({
-    model: 'veo-3.1-generate-preview',
-    aspectRatio: '16:9',
-    resolution: '1080p',
-    extraPrompt: '',
-    batchSize: 1 as 1 | 2 | 3 | 4,
-  });
-  const [videoResults, setVideoResults] = useState<string[]>([]);
-  const [isVideoGenerating, setIsVideoGenerating] = useState(false);
-  const [videoProgressPhase, setVideoProgressPhase] = useState<
-    'submitting' | 'polling' | 'finalizing' | null
-  >(null);
-  const [videoProgressPercent, setVideoProgressPercent] = useState(0);
-  const [fullscreenVideo, setFullscreenVideo] = useState<string | null>(null);
-  const cancelVideoGenRef = useRef(false);
-  const videoGenAbortRef = useRef<AbortController | null>(null);
-  const videoResultsRef = useRef<string[]>([]);
-  const likedVideosRef = useRef<string[]>([]);
-  const veoSettingsRef = useRef(veoSettings);
-
   // Memoized values for performance
   const likedSet = React.useMemo(() => new Set(likedImages), [likedImages]);
-  const likedVideoSet = React.useMemo(() => new Set(likedVideos), [likedVideos]);
 
   useEffect(() => {
     sourcesRef.current = sources;
@@ -295,15 +234,6 @@ function AppContent() {
     batchSize: 1,
     strictMode: true
   });
-  const [upscaleSettings, setUpscaleSettings] = useState<{ model: string, imageSize: "1K" | "2K" | "4K" }>({
-    model: "gemini-3.1-flash-image-preview",
-    imageSize: "4K"
-  });
-  const [expandSettings, setExpandSettings] = useState<{ model: string, aspectRatio: string, prompt: string }>({
-    model: "gemini-3.1-flash-image-preview",
-    aspectRatio: "16:9",
-    prompt: ""
-  });
   const [results, setResults] = useState<string[]>([]);
 
   const resultsRef = useRef<string[]>([]);
@@ -318,30 +248,58 @@ function AppContent() {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
-  useEffect(() => {
-    videoResultsRef.current = videoResults;
-  }, [videoResults]);
-  useEffect(() => {
-    likedVideosRef.current = likedVideos;
-  }, [likedVideos]);
-  useEffect(() => {
-    veoSettingsRef.current = veoSettings;
-  }, [veoSettings]);
-
   const [history, setHistory] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isUpscaling, setIsUpscaling] = useState(false);
-  const [isExpanding, setIsExpanding] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isDraggingRef, setIsDraggingRef] = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState(false);
+  const [hasOpenRouter, setHasOpenRouter] = useState(false);
+  const [checkingKey, setCheckingKey] = useState(true);
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  const externalUpscaleActive = useRef(false);
+  const imageTools = useImageTools({
+    available: hasKey && !checkingKey && !isUpscaling && !isGenerating,
+    onSave: async (url) => {
+      const next = [url, ...historyRef.current].slice(0, 50);
+      historyRef.current = next;
+      setHistory(next);
+      // A local storage failure must not prevent the server save.
+      try { await set('fusion_history', next); } catch { /* Server persistence is still attempted. */ }
+      const saved = await saveToHistory(url);
+      if (!saved) throw new Error('History save failed');
+    },
+  });
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
+  const [generationNotice, setGenerationNotice] = useState<string | null>(null);
+  const generationRunId = useRef(0);
+  const generationAbort = useRef<AbortController | null>(null);
+  const generationActive = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const settingsDialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showSettings || !settingsDialogRef.current) return;
+    const dialog = settingsDialogRef.current as HTMLDivElement;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]')).filter(element => !element.closest('[hidden]'));
+    focusable()[0]?.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); setShowSettings(false); return; }
+      if (event.key !== 'Tab') return;
+      const items = focusable();
+      if (!items.length) { event.preventDefault(); return; }
+      if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items.at(-1)?.focus(); }
+      else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0]?.focus(); }
+    };
+    dialog.addEventListener('keydown', trap);
+    return () => { dialog.removeEventListener('keydown', trap); previousFocus?.focus(); };
+  }, [showSettings]);
   const [settingsTab, setSettingsTab] = useState<'prompt' | 'settings' | 'preview'>('prompt');
   const [settingsPromptMode, setSettingsPromptMode] = useState<'create' | 'edit'>('create');
   const [generationProgress, setGenerationProgress] = useState<CoverGenerationProgress | null>(null);
-  const cancelGenerationRef = useRef(false);
   const [sceneToCoverWarning, setSceneToCoverWarning] = useState(false);
   const [cardLibrary, setCardLibrary] = useState<CardLibraryEntry[]>([]);
   const [referenceLibrary, setReferenceLibrary] = useState<ReferenceLibraryEntry[]>([]);
@@ -369,32 +327,6 @@ function AppContent() {
     if (lightboxIndex < lightboxImages.length - 1) setFullscreenImage(lightboxImages[lightboxIndex + 1]);
   }, [lightboxIndex, lightboxImages]);
 
-  const mouseX = useMotionValue(0);
-  const mouseY = useMotionValue(0);
-  const springX = useSpring(mouseX, { damping: 50, stiffness: 400 });
-  const springY = useSpring(mouseY, { damping: 50, stiffness: 400 });
-
-  const bgX1 = useTransform(springX, [0, 2000], [-50, 50]);
-  const bgY1 = useTransform(springY, [0, 1200], [-50, 50]);
-  const bgX2 = useTransform(springX, [0, 2000], [50, -50]);
-  const bgY2 = useTransform(springY, [0, 1200], [50, -50]);
-
-  useEffect(() => {
-    let rafId: number;
-    const handleMouseMove = (e: MouseEvent) => {
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        mouseX.set(e.clientX);
-        mouseY.set(e.clientY);
-      });
-    };
-    window.addEventListener('mousemove', handleMouseMove, { passive: true });
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      cancelAnimationFrame(rafId);
-    };
-  }, []);
-
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -403,8 +335,6 @@ function AppContent() {
         const localLiked = localStorage.getItem('fusion_liked');
         let idbHistory = await get('fusion_history');
         let idbLiked = await get('fusion_liked');
-        const idbVideoHistory = await get('fusion_video_history');
-        const idbVideoLiked = await get('fusion_video_liked');
         if (localHistory && !idbHistory) {
           idbHistory = JSON.parse(localHistory);
           await set('fusion_history', idbHistory);
@@ -417,22 +347,16 @@ function AppContent() {
         }
 
         // The Cover API persists the shared library and media in this service's MySQL database.
-        const [serverHistory, serverLiked, serverLibrary, serverRefs, serverVideoHistory, serverVideoLiked] = await Promise.all([
+        const [serverHistory, serverLiked, serverLibrary, serverRefs] = await Promise.all([
           loadHistory(),
           loadFavorites(),
           loadCardLibrary(),
           loadReferenceLibrary(),
-          loadVideoHistory(),
-          loadVideoFavorites(),
         ]);
         if (serverHistory.length) setHistory(serverHistory);
         else if (idbHistory) setHistory(idbHistory);
         if (serverLiked.length) setLikedImages(serverLiked);
         else if (idbLiked) setLikedImages(idbLiked);
-        if (serverVideoHistory.length) setVideoHistory(serverVideoHistory);
-        else if (Array.isArray(idbVideoHistory) && idbVideoHistory.length) setVideoHistory(idbVideoHistory);
-        if (serverVideoLiked.length) setLikedVideos(serverVideoLiked);
-        else if (Array.isArray(idbVideoLiked) && idbVideoLiked.length) setLikedVideos(idbVideoLiked);
         setCardLibrary(serverLibrary);
         setReferenceLibrary(serverRefs);
         try {
@@ -447,39 +371,17 @@ function AppContent() {
         } catch {
           /* non-fatal */
         }
-        try {
-          const [idbVideoNotes, serverVideoNotes] = await Promise.all([
-            get('fusion_video_favorite_choice_notes') as Promise<Record<string, string> | undefined>,
-            loadVideoFavoriteChoiceNotesMap(),
-          ]);
-          setVideoFavoriteChoiceNotes({
-            ...(idbVideoNotes && typeof idbVideoNotes === 'object' ? idbVideoNotes : {}),
-            ...serverVideoNotes,
-          });
-        } catch {
-          /* non-fatal */
-        }
       } catch (e) {
         console.error("Failed to load data", e);
         // Fallback to IDB
         try {
           const idbHistory = await get('fusion_history');
           const idbLiked = await get('fusion_liked');
-          const idbVH = await get('fusion_video_history');
-          const idbVL = await get('fusion_video_liked');
           if (idbHistory) setHistory(idbHistory);
           if (idbLiked) setLikedImages(idbLiked);
-          if (Array.isArray(idbVH) && idbVH.length) setVideoHistory(idbVH);
-          if (Array.isArray(idbVL) && idbVL.length) setLikedVideos(idbVL);
           try {
             const idbFavNotes = await get('fusion_favorite_choice_notes') as Record<string, string> | undefined;
             if (idbFavNotes && typeof idbFavNotes === 'object') setFavoriteChoiceNotes(idbFavNotes);
-          } catch {
-            /* non-fatal */
-          }
-          try {
-            const idbVideoNotes = await get('fusion_video_favorite_choice_notes') as Record<string, string> | undefined;
-            if (idbVideoNotes && typeof idbVideoNotes === 'object') setVideoFavoriteChoiceNotes(idbVideoNotes);
           } catch {
             /* non-fatal */
           }
@@ -566,22 +468,27 @@ function AppContent() {
   }, []);
 
   const checkKey = async () => {
+    setCheckingKey(true);
     try {
       if (window.aistudio) {
         // Running inside Google AI Studio — use its key management
         const selected = await window.aistudio.hasSelectedApiKey();
         setHasKey(selected);
+        setHasOpenRouter(false);
       } else {
         // The production key is deliberately server-only. This endpoint returns
         // a capability flag, never a credential.
         const response = await fetch('/api/runtime-capabilities', { credentials: 'same-origin' });
         if (!response.ok) throw new Error(`Runtime capabilities unavailable: HTTP ${response.status}`);
-        const capabilities = await response.json() as { gemini?: unknown };
+        const capabilities = await response.json() as { gemini?: unknown; openrouter?: unknown };
         setHasKey(capabilities.gemini === true);
+        setHasOpenRouter(capabilities.openrouter === true);
       }
     } catch (e) {
-      console.error("Ошибка проверки ключа", e);
       setHasKey(false);
+      setHasOpenRouter(false);
+    } finally {
+      setCheckingKey(false);
     }
   };
 
@@ -728,103 +635,41 @@ function AppContent() {
     setSources(prev => prev.filter((_, i) => i !== index));
   };
 
+  // Calls from Create / History / Favorites keep their existing destination.
+  // The new page captures explicit operations instead of branching on activeTab.
   const handleUpscale = React.useCallback(async (url: string, existingId?: string) => {
-    const upscaleId = existingId || Math.random().toString(36).substring(7);
-    const currentRes = upscaleSettings.imageSize;
-    
-    if (activeTab === 'upscale') {
-      if (existingId) {
-        setUpscaleResults(prev => prev.map(item => 
-          item.id === existingId ? { ...item, status: 'loading', error: undefined, resolution: currentRes } : item
-        ));
-      } else {
-        setUpscaleResults(prev => [{ id: upscaleId, originalUrl: url, status: 'loading', resolution: currentRes }, ...prev]);
-        setUpscaleSource(null);
-      }
-    } else {
-      setIsUpscaling(true);
-    }
-    
+    if (externalUpscaleActive.current) return;
+    externalUpscaleActive.current = true;
+    setIsUpscaling(true);
     setError(null);
+    const requestSettings = { ...imageTools.settings };
+    const input = { data: url, mimeType: /^data:([^;]+);/.exec(url)?.[1] ?? 'image/png' };
     try {
-      const upscaledUrl = await upscaleImage({ data: url, mimeType: 'image/png' }, upscaleSettings.imageSize, upscaleSettings.model);
-      
-      if (activeTab === 'upscale') {
-        setUpscaleResults(prev => prev.map(item => 
-          item.id === upscaleId ? { ...item, upscaledUrl, status: 'done' } : item
-        ));
-      } else {
-        if (existingId) {
-          setUpscaleResults(prev => prev.map(item => 
-            item.id === existingId ? { ...item, upscaledUrl, status: 'done', resolution: currentRes } : item
-          ));
-        } else {
-          setUpscaleResults(prev => [{ id: upscaleId, originalUrl: url, upscaledUrl, status: 'done', resolution: currentRes }, ...prev]);
-        }
-        if (activeTab === 'create') {
-          setResults(prev => [upscaledUrl, ...prev]);
-        }
-      }
-      
-      const newHistory = [upscaledUrl, ...history].slice(0, 50);
+      const upscaledUrl = await upscaleImage(input, requestSettings.imageSize, requestSettings.model);
+      imageTools.addExternalResult({ id: existingId ?? crypto.randomUUID(), source: input, operation: 'upscale', settings: requestSettings, output: upscaledUrl, status: 'done' });
+      if (activeTab === 'create') setResults(prev => [upscaledUrl, ...prev]);
+      const newHistory = [upscaledUrl, ...historyRef.current].slice(0, 50);
+      historyRef.current = newHistory;
       setHistory(newHistory);
       await set('fusion_history', newHistory);
       saveToHistory(upscaledUrl).catch(() => {});
     } catch (err: any) {
       console.error(err);
-      const errorMessage = err.message || "Ошибка при апскейле";
-      
-      if (activeTab === 'upscale') {
-        setUpscaleResults(prev => prev.map(item => 
-          item.id === upscaleId ? { ...item, status: 'error', error: errorMessage } : item
-        ));
-      } else {
-        setError(errorMessage);
-      }
+      setError(err.message || 'Ошибка при апскейле');
     } finally {
-      if (activeTab !== 'upscale') {
-        setIsUpscaling(false);
-      }
+      externalUpscaleActive.current = false;
+      setIsUpscaling(false);
     }
-  }, [activeTab, upscaleSettings, history]);
-
-  const handleExpand = React.useCallback(async (url: string) => {
-    const expandId = Math.random().toString(36).substring(7);
-    
-    setExpandResults(prev => [{ id: expandId, originalUrl: url, status: 'loading', resolution: expandSettings.aspectRatio }, ...prev]);
-    setExpandSource(null);
-    setIsExpanding(true);
-    setError(null);
-
-    try {
-      const expandedUrl = await expandImage(
-        { data: url, mimeType: 'image/png' }, 
-        expandSettings.aspectRatio as any, 
-        expandSettings.prompt, 
-        expandSettings.model
-      );
-      
-      setExpandResults(prev => prev.map(item => 
-        item.id === expandId ? { ...item, upscaledUrl: expandedUrl, status: 'done' } : item
-      ));
-      
-      const newHistory = [expandedUrl, ...history].slice(0, 50);
-      setHistory(newHistory);
-      await set('fusion_history', newHistory);
-      saveToHistory(expandedUrl).catch(() => {});
-    } catch (err: any) {
-      console.error(err);
-      const errorMessage = err.message || "Ошибка при расширении";
-      setExpandResults(prev => prev.map(item => 
-        item.id === expandId ? { ...item, status: 'error', error: errorMessage } : item
-      ));
-      setError(errorMessage);
-    } finally {
-      setIsExpanding(false);
-    }
-  }, [expandSettings, history]);
+  }, [activeTab, imageTools.settings, imageTools.addExternalResult]);
 
   const handleGenerate = async () => {
+    if (generationActive.current || isUpscaling) return;
+    const providerUnavailable = settings.model === 'gpt-image-2'
+      ? !chatGpt.connected || chatGpt.checking
+      : isOpenRouterImageModel(settings.model)
+        ? !hasOpenRouter || checkingKey
+        : !hasKey || checkingKey;
+    if (providerUnavailable) { setError('Генерация пока недоступна. Проверьте подключение выбранной модели.'); return; }
     const ordered =
       createLayoutMode === 'scene'
         ? sceneRolesOrder(scenePlan)
@@ -842,44 +687,93 @@ function AppContent() {
     }
     setError(null);
     setIsGenerating(true);
-    cancelGenerationRef.current = false;
+    generationActive.current = true;
+    const runId = ++generationRunId.current;
+    generationAbort.current = new AbortController();
+    setSaveWarning(null);
+    setGenerationNotice(null);
     setGenerationProgress({
       done: 0,
       total: settings.batchSize,
       phase: 'preparing',
     });
+    const openRouterRun = isOpenRouterImageModel(settings.model);
+    const historyBeforeRun = historyRef.current;
+    const streamedImages: string[] = [];
+    const publishOpenRouterResult = openRouterRun
+      ? async (imageUrl: string) => {
+          streamedImages.push(imageUrl);
+          const visibleImages = [...streamedImages];
+          const newHistory = [...visibleImages, ...historyBeforeRun].slice(0, 100);
+          setResults(visibleImages);
+          historyRef.current = newHistory;
+          setHistory(newHistory);
+          setGenerationNotice('Сохраняем готовый вариант в историю…');
+          const [savedLocally, saved] = await Promise.all([
+            set('fusion_history', newHistory).then(() => true).catch(() => false),
+            saveToHistory(imageUrl).catch(() => null),
+          ]);
+          setGenerationNotice(null);
+          if (!saved) {
+            setSaveWarning('Не удалось сохранить результат в историю на сервере. Скачайте изображение, чтобы не потерять его.');
+          }
+          if (!savedLocally && !saved) {
+            throw new Error('Готовый вариант показан, но не удалось надёжно сохранить его. Скачайте изображение.');
+          }
+        }
+      : undefined;
     try {
       const images = await generateFusedCover(
         ordered, reference, settings, baseImage, likedImages, referenceVisionNotes,
-        (p) => setGenerationProgress(p)
+        (p) => { if (generationRunId.current === runId) setGenerationProgress(p); },
+        generationAbort.current.signal,
+        publishOpenRouterResult,
       );
 
-      if (cancelGenerationRef.current) return;
+      if (generationRunId.current !== runId) return;
 
-      setResults(images);
-      const newHistory = [...images, ...history].slice(0, 100);
-      setHistory(newHistory);
-      await set('fusion_history', newHistory);
-      for (const img of images) {
-        saveToHistory(img).catch(() => {});
+      if (!openRouterRun) {
+        setGenerationProgress({
+          done: images.length,
+          total: settings.batchSize,
+          phase: 'finalizing',
+        });
+        setResults(images);
+        const newHistory = [...images, ...history].slice(0, 100);
+        historyRef.current = newHistory;
+        setHistory(newHistory);
+        // A storage failure must never turn an already generated image into an error.
+        void set('fusion_history', newHistory).catch(() => {});
+        setGenerationNotice('Сохраняем результат в историю…');
+        void Promise.all(images.map(img => saveToHistory(img).catch(() => null))).then(saved => {
+          if (generationRunId.current !== runId) return;
+          setGenerationNotice(null);
+          if (saved.some(item => !item)) setSaveWarning('Не удалось сохранить результат в историю на сервере. Скачайте изображение, чтобы не потерять его.');
+        });
       }
     } catch (err: any) {
-      if (cancelGenerationRef.current) return;
+      if (generationRunId.current !== runId) return;
       console.error(err);
       setError(err.message || "Генерация не удалась. Пожалуйста, попробуйте снова.");
       if (err.message?.includes("Requested entity was not found")) {
         setHasKey(false);
       }
     } finally {
-      setIsGenerating(false);
-      setGenerationProgress(null);
+      if (generationRunId.current === runId) {
+        generationActive.current = false;
+        setIsGenerating(false);
+        setGenerationProgress(null);
+      }
     }
   };
 
   const handleCancelGeneration = () => {
-    cancelGenerationRef.current = true;
+    generationAbort.current?.abort();
+    generationRunId.current += 1;
+    generationActive.current = false;
     setIsGenerating(false);
     setGenerationProgress(null);
+    setGenerationNotice('Ожидание остановлено. Уже отправленная операция может продолжиться на стороне сервиса.');
   };
 
   const runFavoriteChoiceAnalysis = React.useCallback(async (
@@ -952,158 +846,6 @@ function AppContent() {
     },
     [runFavoriteChoiceAnalysis]
   );
-
-  const runVideoFavoriteChoiceAnalysis = React.useCallback(async (
-    url: string,
-    favoriteRowId: string | null,
-    batchSnapshot?: string[]
-  ) => {
-    setVideoFavoriteAnalysisLoadingUrl(url);
-    try {
-      const chosen = await videoUrlToFirstFrameSource(url);
-      const batch = batchSnapshot ?? videoResultsRef.current;
-      const siblings = batch.filter((u) => u !== url);
-      const alternatives: ImageSource[] = [];
-      for (const u of siblings.slice(0, 3)) {
-        alternatives.push(await videoUrlToFirstFrameSource(u));
-      }
-      const text = await analyzeFavoriteVideoChoiceVision(chosen, alternatives, {
-        userPromptHint: veoSettingsRef.current.extraPrompt,
-      });
-      setVideoFavoriteChoiceNotes((prev) => ({ ...prev, [url]: text }));
-      const existing = (await get('fusion_video_favorite_choice_notes')) as Record<string, string> | undefined;
-      await set('fusion_video_favorite_choice_notes', {
-        ...(existing && typeof existing === 'object' ? existing : {}),
-        [url]: text,
-      });
-      if (favoriteRowId) {
-        await updateVideoFavoriteChoiceAnalysis(favoriteRowId, text);
-      }
-    } catch (e) {
-      console.error('runVideoFavoriteChoiceAnalysis', e);
-    } finally {
-      setVideoFavoriteAnalysisLoadingUrl(null);
-    }
-  }, []);
-
-  const toggleVideoLike = React.useCallback(
-    async (url: string) => {
-      const isLiked = likedVideosRef.current.includes(url);
-      if (isLiked) {
-        const newLikes = likedVideosRef.current.filter((item) => item !== url);
-        setLikedVideos(newLikes);
-        likedVideosRef.current = newLikes;
-        await set('fusion_video_liked', newLikes);
-        setVideoFavoriteChoiceNotes((prev) => {
-          const next = { ...prev };
-          delete next[url];
-          return next;
-        });
-        try {
-          const idbNotes = (await get('fusion_video_favorite_choice_notes')) as Record<string, string> | undefined;
-          if (idbNotes && typeof idbNotes === 'object' && idbNotes[url]) {
-            delete idbNotes[url];
-            await set('fusion_video_favorite_choice_notes', idbNotes);
-          }
-        } catch (e) {
-          console.error(e);
-        }
-        removeVideoFromFavorites(url).catch(() => {});
-        return;
-      }
-      const newLikes = [...likedVideosRef.current, url];
-      setLikedVideos(newLikes);
-      likedVideosRef.current = newLikes;
-      await set('fusion_video_liked', newLikes);
-      let favId: string | null = null;
-      const res = await addVideoToFavorites(url);
-      favId = res?.id ?? null;
-      void runVideoFavoriteChoiceAnalysis(url, favId, videoResultsRef.current.slice());
-    },
-    [runVideoFavoriteChoiceAnalysis]
-  );
-
-  const handleGenerateVideo = async () => {
-    if (!videoSource) {
-      setError('Загрузите изображение для анимации.');
-      return;
-    }
-    setError(null);
-    setIsVideoGenerating(true);
-    cancelVideoGenRef.current = false;
-    videoGenAbortRef.current = new AbortController();
-    setVideoProgressPhase('submitting');
-    setVideoProgressPercent(0);
-    try {
-      const urls = await generateVeoVideoFromImage(
-        videoSource,
-        VEO_DEFAULT_PROMPT,
-        {
-          model: veoSettings.model,
-          aspectRatio: veoSettings.aspectRatio,
-          resolution: veoSettings.resolution,
-          extraPrompt: veoSettings.extraPrompt,
-          batchSize: veoSettings.batchSize,
-        },
-        (u: VeoProgressUpdate) => {
-          setVideoProgressPhase(u.phase);
-          setVideoProgressPercent(u.percent);
-        },
-        videoGenAbortRef.current.signal
-      );
-      if (cancelVideoGenRef.current) return;
-      setVideoResults(urls);
-      videoResultsRef.current = urls;
-      setVideoHistory((prev) => {
-        const vh = [...urls, ...prev].slice(0, 50);
-        void set('fusion_video_history', vh);
-        return vh;
-      });
-      for (const u of urls) saveVideoToHistory(u).catch(() => {});
-    } catch (err: unknown) {
-      if (cancelVideoGenRef.current) return;
-      const aborted =
-        err instanceof Error &&
-        (err.name === 'AbortError' || err.message === 'Отменено');
-      if (aborted) return;
-      console.error(err);
-      const msg = err instanceof Error ? err.message : 'Ошибка генерации видео';
-      setError(msg);
-    } finally {
-      videoGenAbortRef.current = null;
-      setIsVideoGenerating(false);
-      setVideoProgressPhase(null);
-      setVideoProgressPercent(0);
-    }
-  };
-
-  const handleCancelVideoGeneration = () => {
-    cancelVideoGenRef.current = true;
-    videoGenAbortRef.current?.abort();
-    setIsVideoGenerating(false);
-    setVideoProgressPhase(null);
-    setVideoProgressPercent(0);
-  };
-
-  const handleClearVideoFields = () => {
-    if (isVideoGenerating) {
-      cancelVideoGenRef.current = true;
-      videoGenAbortRef.current?.abort();
-      setIsVideoGenerating(false);
-      setVideoProgressPhase(null);
-      setVideoProgressPercent(0);
-    }
-    setVideoSource(null);
-    setVeoSettings({
-      model: 'veo-3.1-generate-preview',
-      aspectRatio: '16:9',
-      resolution: '1080p',
-      extraPrompt: '',
-      batchSize: 1,
-    });
-    setVideoResults([]);
-    setError(null);
-  };
 
   const handleSaveCard = React.useCallback(async (name: string, cardId: string, imageData: string, mimeType: string) => {
     setIsSavingCard(true);
@@ -1251,337 +993,52 @@ function AppContent() {
     return roles.every(r => sources.some(s => s.role === r));
   }, [createLayoutMode, scenePlan, sources]);
 
-  const canRunVideo = React.useMemo(() => !!videoSource, [videoSource]);
 
   const updateReference = React.useCallback((r: ImageSource | null) => {
     setReference(r);
     if (!r) setReferenceVisionNotes(null);
   }, []);
 
-  const selectReferenceFromLibrary = React.useCallback(async (entry: ReferenceLibraryEntry) => {
-    setReferenceVisionNotes(entry.visionAnalysis ?? null);
+  const selectReferenceFromLibrary = React.useCallback(async (entry: ReferenceLibraryEntry, signal?: AbortSignal) => {
     try {
+      signal?.throwIfAborted();
       const match = entry.storageUrl.match(/^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/);
       if (match) {
         setReference({ data: entry.storageUrl, mimeType: match[1] });
+        setReferenceVisionNotes(entry.visionAnalysis ?? null);
         return;
       }
-      const response = await fetch(entry.storageUrl);
+      const response = await fetch(entry.storageUrl, { signal });
+      if (!response.ok) throw new Error('Reference image unavailable');
       const blob = await response.blob();
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setReference({ data: reader.result as string, mimeType: blob.type });
-      };
-      reader.readAsDataURL(blob);
+      if (!blob.type.startsWith('image/')) throw new Error('Reference response is not an image');
+      const data = await readFileAsDataURL(new File([blob], 'reference', { type: blob.type }));
+      signal?.throwIfAborted();
+      setReference({ data, mimeType: blob.type });
+      setReferenceVisionNotes(entry.visionAnalysis ?? null);
     } catch (e) {
+      if (signal?.aborted) throw e;
       console.error("Failed to load library image", e);
       setError("Не удалось загрузить изображение из библиотеки.");
+      throw e;
     }
   }, []);
 
-  if (!hasKey) {
-    return (
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-6 text-center relative overflow-hidden">
-        {/* Interactive Background */}
-        <div className="absolute inset-0 z-0 overflow-hidden">
-          <motion.div 
-            animate={{ 
-              x: [0, 100, 0], 
-              y: [0, 50, 0],
-              scale: [1, 1.2, 1]
-            }}
-            transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-            className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.1)_0%,transparent_50%)]" 
-          />
-        </div>
-
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="relative z-10 max-w-xl w-full"
-        >
-          <div className="w-24 h-24 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-2xl shadow-blue-500/20 border border-white/10">
-            <Sparkles className="w-12 h-12 text-white" />
-          </div>
-          <div className="mb-4">
-            <h1 className="text-5xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-white to-zinc-500">
-              Cover
-            </h1>
-            <p className="text-sm font-bold uppercase tracking-[0.25em] text-zinc-500 mt-2">Обложки с ИИ</p>
-          </div>
-          <p className="text-zinc-400 text-lg leading-relaxed mb-10">
-            {window.aistudio
-              ? "Для начала работы необходимо выбрать API ключ Gemini. Это бесплатно и безопасно."
-              : "Генератор временно недоступен. Попробуйте обновить страницу через несколько минут."}
-          </p>
-
-          <div className="space-y-4">
-            {window.aistudio ? (
-              <button
-                onClick={handleOpenKeyDialog}
-                className="w-full py-5 bg-white text-zinc-950 font-bold rounded-2xl hover:bg-zinc-100 transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-3 shadow-xl"
-              >
-                Выбрать API ключ
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            ) : null}
-            {!window.aistudio && (
-              <button
-                type="button"
-                onClick={() => void checkKey()}
-                className="w-full py-5 bg-white text-zinc-950 font-bold rounded-2xl hover:bg-zinc-100 transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-3 shadow-xl"
-              >
-                Повторить проверку
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            )}
-            {window.aistudio && <p className="mt-6 text-xs text-zinc-500">
-              Узнать больше о <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="underline hover:text-zinc-400 transition-colors">биллинге Gemini API</a>.
-            </p>}
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
+  const availability = settings.model === 'gpt-image-2'
+    ? chatGpt.checking ? 'checking' : chatGpt.connected ? 'available' : 'unavailable'
+    : isOpenRouterImageModel(settings.model)
+      ? checkingKey ? 'checking' : hasOpenRouter ? 'available' : 'unavailable'
+    : checkingKey ? 'checking' : hasKey ? 'available' : 'unavailable';
 
   return (
-    <div data-theme={theme} className="cover-workspace min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-indigo-500/30 relative overflow-hidden">
-      {/* Dynamic Background */}
-      <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-        <motion.div 
-          style={{ 
-            x: bgX1,
-            y: bgY1,
-          }}
-          className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.08)_0%,transparent_50%)]" 
-        />
-        <motion.div 
-          style={{ 
-            x: bgX2,
-            y: bgY2,
-          }}
-          className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(circle_at_80%_20%,rgba(99,102,241,0.08)_0%,transparent_50%)]" 
-        />
-        <motion.div 
-          animate={{ 
-            scale: [1, 1.1, 1],
-            opacity: [0.3, 0.5, 0.3]
-          }}
-          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute top-[20%] right-[10%] w-[40%] h-[40%] bg-indigo-500/5 blur-[120px] rounded-full"
-        />
-        <motion.div 
-          animate={{ 
-            scale: [1.1, 1, 1.1],
-            opacity: [0.2, 0.4, 0.2]
-          }}
-          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute bottom-[10%] left-[10%] w-[50%] h-[50%] bg-blue-500/5 blur-[150px] rounded-full"
-        />
-      </div>
-
-      {/* Header — скрыт в полноэкранном просмотре изображения или видео */}
-      <header
-        className={`cover-app-sidebar border-b border-white/5 bg-zinc-950/80 backdrop-blur-2xl sticky top-0 z-50 ${fullscreenImage || fullscreenVideo ? 'hidden' : ''}`}
-        aria-hidden={fullscreenImage || fullscreenVideo ? true : undefined}
-      >
-        <div className="cover-sidebar-content max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-10">
-            <div
-              className="cover-brand flex items-center gap-3 group cursor-pointer"
-              onClick={() => setActiveTab('create')}
-              title="Cover — главная"
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setActiveTab('create');
-                }
-              }}
-            >
-              <div className="cover-brand-mark w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20 group-hover:scale-110 transition-transform">
-                <Sparkles className="w-6 h-6 text-white" />
-              </div>
-              <div className="flex flex-col leading-none">
-                <span className="cover-brand-name font-display font-black text-xl tracking-tight text-white">Cover</span>
-                <span className="cover-brand-subtitle text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mt-0.5">Обложки</span>
-              </div>
-            </div>
-
-            <nav className="cover-navigation hidden lg:flex items-center gap-4" aria-label="Разделы Cover">
-              <div className="cover-navigation-group flex items-center gap-2">
-                <button
-                  onClick={() => setActiveTab('create')}
-                  className={`cover-nav-item px-6 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'create' ? 'cover-nav-primary-active shadow-lg' : 'cover-nav-primary-inactive'}`}
-                >
-                  <Plus className="w-4 h-4" />
-                  Создать
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('thumbnail')}
-                  className={`cover-nav-item px-4 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'thumbnail' ? 'cover-nav-primary-active shadow-lg' : 'cover-nav-primary-inactive'}`}
-                >
-                  <Paintbrush className="w-4 h-4" />
-                  HS
-                </button>
-                <button
-                  onClick={() => setActiveTab('upscale')}
-                  className={`cover-nav-item px-6 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'upscale' ? 'cover-nav-primary-active shadow-lg' : 'cover-nav-primary-inactive'}`}
-                >
-                  <Maximize2 className="w-4 h-4" />
-                  Апскейл
-                </button>
-                <button
-                  onClick={() => setActiveTab('expand')}
-                  className={`cover-nav-item px-6 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'expand' ? 'cover-nav-primary-active shadow-lg' : 'cover-nav-primary-inactive'}`}
-                >
-                  <Layout className="w-4 h-4" />
-                  Формат
-                </button>
-                <button
-                  onClick={() => setActiveTab('video')}
-                  className={`cover-nav-item px-6 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'video' ? 'cover-nav-primary-active shadow-lg' : 'cover-nav-primary-inactive'}`}
-                >
-                  <Film className="w-4 h-4" />
-                  Видео
-                </button>
-              </div>
-
-              <div className="h-6 w-px bg-white/10 mx-2" />
-
-              <div className="cover-navigation-group flex items-center gap-1">
-                {[
-                  { id: 'history', label: 'История', icon: Layout },
-                  { id: 'favorites', label: 'Избранное', icon: ImageIcon },
-                  { id: 'library', label: 'Библиотека', icon: BookOpen },
-                  { id: 'references', label: 'Референсы', icon: Images },
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id as any)}
-                    className={`cover-nav-item px-5 py-2 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === tab.id ? 'cover-nav-primary-active' : 'cover-nav-primary-inactive'}`}
-                  >
-                    <tab.icon className="w-4 h-4" />
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-            </nav>
-          </div>
-
-          <div className="cover-header-actions flex items-center gap-6">
-            <div className="cover-mobile-navigation lg:hidden">
-              <label className="sr-only" htmlFor="cover-mobile-section">Раздел Cover</label>
-              <select
-                id="cover-mobile-section"
-                value={activeTab}
-                onChange={(event) => setActiveTab(event.target.value as AppTab)}
-              >
-                <optgroup label="Инструменты">
-                  <option value="create">Создать</option>
-                  <option value="thumbnail">HS-обложка</option>
-                  <option value="upscale">Апскейл</option>
-                  <option value="expand">Формат</option>
-                  <option value="video">Видео</option>
-                </optgroup>
-                <optgroup label="Хранилище">
-                  <option value="history">История</option>
-                  <option value="favorites">Избранное</option>
-                  <option value="library">Библиотека</option>
-                  <option value="references">Референсы</option>
-                </optgroup>
-              </select>
-            </div>
-            <button
-              type="button"
-              onClick={() => setTheme((currentTheme) => currentTheme === 'light' ? 'dark' : 'light')}
-              className="cover-theme-toggle cover-icon-button p-2.5 rounded-full bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all"
-              aria-label={theme === 'light' ? 'Переключить на тёмную тему' : 'Переключить на белую тему'}
-              aria-pressed={theme === 'dark'}
-              title={theme === 'light' ? 'Тёмная тема' : 'Белая тема'}
-            >
-              {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
-            </button>
-            {activeTab === 'thumbnail' ? (
-              <div className="hidden items-center gap-2 text-xs font-bold text-zinc-500 lg:flex">
-                <Paintbrush className="h-4 w-4 text-violet-400" />
-                Редактор 16:9
-              </div>
-            ) : (
-              <>
-            <button
-              onClick={() => setShowSettings(true)}
-              className="cover-settings-action cover-icon-button p-2.5 rounded-full bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all"
-              title="Настройки промпта"
-            >
-              <Settings className="w-5 h-5" />
-            </button>
-            <button
-              onClick={() => { setSources([]); setReference(null); setResults([]); setBaseImage(null); }}
-              className="cover-reset-action cover-quiet-action text-sm font-bold text-zinc-500 hover:text-white transition-colors uppercase tracking-widest"
-            >
-              Сброс
-            </button>
-            <button 
-              onClick={activeTab === 'video' ? handleGenerateVideo : handleGenerate}
-              disabled={
-                activeTab === 'video'
-                  ? isVideoGenerating || !canRunVideo
-                  : isGenerating || !canRunCover
-              }
-              className={`cover-primary-action cover-header-primary px-8 py-3 font-black rounded-full hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-xl uppercase tracking-tighter text-sm ${activeTab === 'video' ? 'bg-violet-600 text-white shadow-violet-500/40' : baseImage ? 'bg-indigo-600 text-white shadow-indigo-500/40' : 'bg-white text-zinc-950 shadow-white/20'}`}
-            >
-              {activeTab === 'video' ? (
-                isVideoGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Film className="w-4 h-4" />
-              ) : isGenerating ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Sparkles className="w-4 h-4" />
-              )}
-              {activeTab === 'video' ? 'Видео' : baseImage ? 'Доработать' : 'Создать'}
-            </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {isGenerating && generationProgress && (
-          <div className="relative h-1 w-full overflow-hidden bg-zinc-900 border-t border-white/5">
-            {generationProgress.phase === 'preparing' || generationProgress.phase === 'strict' ? (
-              <motion.div
-                className="absolute top-0 h-full w-[38%] rounded-full bg-gradient-to-r from-indigo-600 to-violet-500 shadow-[0_0_12px_rgba(99,102,241,0.6)]"
-                initial={{ left: '-38%' }}
-                animate={{ left: ['-38%', '100%'] }}
-                transition={{ duration: 1.15, repeat: Infinity, ease: 'linear' }}
-              />
-            ) : (
-              <motion.div
-                className="h-full rounded-full bg-gradient-to-r from-indigo-600 to-violet-500"
-                initial={{ width: '0%' }}
-                animate={{
-                  width: `${Math.min(
-                    100,
-                    (generationProgress.done / Math.max(1, generationProgress.total)) * 100
-                  )}%`,
-                }}
-                transition={{ duration: 0.35, ease: 'easeOut' }}
-              />
-            )}
-          </div>
-        )}
-        {isVideoGenerating && videoProgressPhase && (
-          <div className="relative h-1 w-full overflow-hidden bg-zinc-900 border-t border-white/5">
-            <motion.div
-              className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 shadow-[0_0_12px_rgba(139,92,246,0.5)]"
-              initial={{ width: '0%' }}
-              animate={{ width: `${Math.min(100, Math.max(0, videoProgressPercent))}%` }}
-              transition={{ duration: 0.25, ease: 'easeOut' }}
-            />
-          </div>
-        )}
-      </header>
+    <div data-theme={theme} className="cover-workspace studio-workspace">
+      <WorkspaceNavigation
+        activeTab={activeTab}
+        onSelect={setActiveTab}
+        theme={theme}
+        onToggleTheme={() => setTheme(current => current === 'light' ? 'dark' : 'light')}
+        hidden={!!fullscreenImage}
+      />
 
       {/* Settings Modal — centered */}
       <AnimatePresence>
@@ -1592,17 +1049,21 @@ function AppContent() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[90] bg-zinc-950/80 backdrop-blur-md"
+              className="fixed inset-0 z-[90] bg-zinc-950/80"
               onClick={() => setShowSettings(false)}
             />
             {/* Modal */}
-            <div className="fixed inset-0 z-[91] flex items-center justify-center p-4 pointer-events-none">
+            <div className="legacy-cover-ui fixed inset-0 z-[91] flex items-center justify-center p-4 pointer-events-none">
               <motion.div
                 initial={{ opacity: 0, scale: 0.96, y: 16 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.96, y: 16 }}
                 transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-                className="w-full max-w-2xl max-h-[90vh] bg-zinc-950 border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden pointer-events-auto"
+                ref={settingsDialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="studio-settings-title"
+                className="studio-settings-dialog w-full max-w-2xl max-h-[90vh] bg-zinc-950 border border-white/10 flex flex-col overflow-hidden pointer-events-auto"
                 onClick={(e) => e.stopPropagation()}
               >
                 {/* Modal Header */}
@@ -1611,7 +1072,7 @@ function AppContent() {
                     <div className="w-8 h-8 bg-indigo-500/10 rounded-xl flex items-center justify-center border border-indigo-500/20">
                       <Settings className="w-4 h-4 text-indigo-400" />
                     </div>
-                    <h2 className="text-sm font-black uppercase tracking-widest text-white">Промпт генерации</h2>
+                    <h2 id="studio-settings-title" className="text-sm font-medium text-white">Системный промпт</h2>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${baseImage ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
@@ -1689,6 +1150,7 @@ function AppContent() {
                           <div className="text-[11px] text-zinc-500 mt-0.5">Vision QA-проверка и refine после генерации</div>
                         </div>
                         <button
+                          disabled={settings.model === 'gpt-image-2' || isOpenRouterImageModel(settings.model)}
                           onClick={() => setSettings((s: any) => ({ ...s, strictMode: !s.strictMode }))}
                           className={`w-11 h-6 rounded-full transition-all relative shrink-0 ${settings.strictMode ? 'bg-amber-500' : 'bg-zinc-700'}`}
                         >
@@ -1702,43 +1164,37 @@ function AppContent() {
                   {settingsTab === 'settings' && (
                     <div className="p-6 space-y-6">
 
-                      {/* Model */}
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Модель</label>
-                        <div className="space-y-2">
-                          {GENERATION_MODELS.map(m => (
-                            <button
-                              key={m.id}
-                              onClick={() => setSettings((s: any) => ({
-                                ...s,
-                                model: m.id,
-                                imageSize: (MODELS_NO_512PX.has(m.id) && s.imageSize === "512px") ? "1K" : s.imageSize
-                              }))}
-                              className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border text-left transition-all ${settings.model === m.id ? 'bg-indigo-500/10 border-indigo-500/30 text-white' : 'bg-zinc-900 border-white/5 text-zinc-400 hover:border-white/10 hover:text-zinc-300'}`}
-                            >
-                              <div>
-                                <div className="text-xs font-bold">{m.name}</div>
-                                <div className="text-[11px] text-zinc-500 mt-0.5">{m.desc}</div>
-                              </div>
-                              {settings.model === m.id && <div className="w-2 h-2 rounded-full bg-indigo-400 shrink-0" />}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                      <ModelPicker options={generationModelOptions} value={settings.model} disabled={isGenerating || isUpscaling} openRouterEnabled={hasOpenRouter}
+                        onChange={model => setSettings((s: any) => {
+                          const normalized = normalizeOpenRouterSettings(model, s.imageSize, s.aspectRatio);
+                          return {
+                            ...s,
+                            model,
+                            ...normalized,
+                            imageSize: MODELS_NO_512PX.has(model) && normalized.imageSize === "512px" ? "1K" : normalized.imageSize,
+                          };
+                        })}
+                      />
+                      {settings.model === 'gpt-image-2' && <ChatGptImageNotice />}
+                      {isOpenRouterImageModel(settings.model) && <OpenRouterImageNotice modelId={settings.model} />}
 
                       {/* Aspect Ratio */}
                       <div className="space-y-2">
                         <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Формат (Aspect Ratio)</label>
                         <div className="flex flex-wrap gap-2">
-                          {ASPECT_RATIOS.map(ratio => (
+                          {ASPECT_RATIOS.map(ratio => {
+                            const openRouterModel = getOpenRouterModel(settings.model);
+                            const isDisabled = Boolean(openRouterModel && openRouterModel.aspectRatios.length > 0 && !(openRouterModel.aspectRatios as readonly string[]).includes(ratio));
+                            return (
                             <button
                               key={ratio}
-                              onClick={() => setSettings((s: any) => ({ ...s, aspectRatio: ratio as any }))}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${settings.aspectRatio === ratio ? 'bg-white border-white text-zinc-950 shadow-md' : 'bg-zinc-900 border-white/5 text-zinc-400 hover:border-white/10 hover:text-zinc-300'}`}
+                              disabled={isDisabled}
+                              onClick={() => !isDisabled && setSettings((s: any) => ({ ...s, aspectRatio: ratio as any }))}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${isDisabled ? 'opacity-40 cursor-not-allowed bg-zinc-900 border-white/5 text-zinc-600' : settings.aspectRatio === ratio ? 'bg-white border-white text-zinc-950 shadow-md' : 'bg-zinc-900 border-white/5 text-zinc-400 hover:border-white/10 hover:text-zinc-300'}`}
                             >
                               {ratio}
                             </button>
-                          ))}
+                          )})}
                         </div>
                       </div>
 
@@ -1747,7 +1203,10 @@ function AppContent() {
                         <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Разрешение</label>
                         <div className="flex gap-2">
                           {RESOLUTIONS.map(res => {
-                            const isDisabled = MODELS_NO_512PX.has(settings.model) && res === "512px";
+                            const openRouterModel = getOpenRouterModel(settings.model);
+                            const isDisabled = settings.model === 'gpt-image-2'
+                              || Boolean(openRouterModel && (openRouterModel.resolutions.length === 0 || !(openRouterModel.resolutions as readonly string[]).includes(res)))
+                              || MODELS_NO_512PX.has(settings.model) && res === "512px";
                             return (
                               <button
                                 key={res}
@@ -1880,16 +1339,24 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
         )}
       </AnimatePresence>
 
-      <main className="cover-main max-w-7xl mx-auto p-6 relative z-10">
-        {activeTab === 'create' && (
-          <section className="cover-workspace-intro" aria-labelledby="workspace-title">
-            <div>
-              <p className="cover-eyebrow">{createWorkspaceMeta.eyebrow}</p>
-              <h1 id="workspace-title">{createWorkspaceMeta.title}</h1>
-              <p className="cover-workspace-description">{createWorkspaceMeta.description}</p>
+      <main className="studio-main" id="studio-panel" role="tabpanel" aria-labelledby={`studio-tab-${activeTab}`}>
+        <div className="studio-screen-header">
+          <h1 id="studio-screen-title" tabIndex={-1}>{workspaceTabs.find(tab => tab.id === activeTab)?.label}</h1>
+          {activeTab === 'create' && (
+            <div className="studio-screen-actions">
+              <Button variant="ghost" disabled={isGenerating || isUpscaling} onClick={() => {
+                if ((sources.length || reference || results.length || baseImage) && !window.confirm('Сбросить исходники и результаты текущей обложки? История останется на месте.')) return;
+                setSources([]); updateReference(null); setResults([]); setBaseImage(null);
+                setError(null); setSaveWarning(null); setGenerationNotice(null);
+              }}>Сбросить</Button>
             </div>
-            <p className="cover-workspace-status"><span aria-hidden="true" />Черновик</p>
-          </section>
+          )}
+        </div>
+        {(checkingKey || !hasKey) && activeTab !== 'create' && (
+          <div className="studio-capability" role="status">
+            <p><strong>{checkingKey ? 'Проверяем подключение Gemini' : 'Gemini временно недоступен'}</strong>Это не влияет на подключённый ChatGPT. Сохранённые результаты и локальный редактор доступны.</p>
+            {!checkingKey && <Button onClick={() => void checkKey()}>Повторить проверку</Button>}
+          </div>
         )}
         <AnimatePresence>
           {(isUpscaling && (activeTab === 'history' || activeTab === 'favorites')) && (
@@ -1927,20 +1394,15 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
               </div>
             }
           >
-            <div hidden={activeTab !== 'thumbnail'}>
+            <div className="legacy-cover-ui" hidden={activeTab !== 'thumbnail'}>
               <ThumbnailTab />
             </div>
           </Suspense>
         )}
 
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
+          <div
             key={activeTab}
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
-            className="w-full"
+            className={`studio-panel-enter ${activeTab === 'create' || activeTab === 'image-tools' || activeTab === 'history' || activeTab === 'favorites' ? 'w-full' : 'legacy-cover-ui w-full'}`}
           >
             <Suspense
               fallback={
@@ -1949,69 +1411,27 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
                 </div>
               }
             >
-          {activeTab === 'thumbnail' ? null : activeTab === 'upscale' ? (
-            <UpscaleTab 
-              key="upscale"
-              upscaleSource={upscaleSource}
-              setUpscaleSource={setUpscaleSource}
-              upscaleSettings={upscaleSettings}
-              setUpscaleSettings={setUpscaleSettings}
-              isUpscaling={isUpscaling}
-              handleUpscale={handleUpscale}
-              upscaleResults={upscaleResults}
-              setUpscaleResults={setUpscaleResults}
-              setFullscreenImage={setFullscreenImage}
+          {activeTab === 'thumbnail' ? null : activeTab === 'image-tools' ? (
+            <ImageToolsTab
+              tools={imageTools}
+              available={hasKey && !checkingKey && !isUpscaling && !isGenerating}
+              onFullscreen={setFullscreenImage}
               onRefine={(url) => {
-                setBaseImage({ data: url, mimeType: 'image/png' });
+                setBaseImage({ data: url, mimeType: /^data:([^;]+);/.exec(url)?.[1] ?? 'image/png' });
                 setActiveTab('create');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
                 setTimeout(() => promptRef.current?.focus(), 100);
               }}
-              error={error}
-            />
-          ) : activeTab === 'expand' ? (
-            <ExpandTab 
-              key="expand"
-              expandSource={expandSource}
-              setExpandSource={setExpandSource}
-              expandSettings={expandSettings}
-              setExpandSettings={setExpandSettings}
-              isExpanding={isExpanding}
-              handleExpand={handleExpand}
-              expandResults={expandResults}
-              setExpandResults={setExpandResults}
-              setFullscreenImage={setFullscreenImage}
-              onRefine={(url) => {
-                setBaseImage({ data: url, mimeType: 'image/png' });
-                setActiveTab('create');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-                setTimeout(() => promptRef.current?.focus(), 100);
-              }}
-              error={error}
-              ASPECT_RATIOS={ASPECT_RATIOS}
-            />
-          ) : activeTab === 'video' ? (
-            <VideoTab
-              key="video"
-              sourceImage={videoSource}
-              setSourceImage={setVideoSource}
-              veoSettings={veoSettings}
-              setVeoSettings={setVeoSettings}
-              isGenerating={isVideoGenerating}
-              videoProgressPhase={videoProgressPhase}
-              videoProgressPercent={videoProgressPercent}
-              onGenerate={handleGenerateVideo}
-              onCancel={handleCancelVideoGeneration}
-              onClearAllFields={handleClearVideoFields}
-              videoResults={videoResults}
-              likedVideoSet={likedVideoSet}
-              toggleVideoLike={toggleVideoLike}
-              setFullscreenVideo={setFullscreenVideo}
-              error={error}
             />
           ) : activeTab === 'create' ? (
             <CreateTab
               key="create"
+              availability={availability}
+              onRetryAvailability={() => void checkKey()}
+              onOpenSettings={() => setShowSettings(true)}
+              saveWarning={saveWarning}
+              generationNotice={generationNotice}
+              openRouterEnabled={hasOpenRouter}
               sources={sources}
               setSources={setSources}
               createLayoutMode={createLayoutMode}
@@ -2064,23 +1484,11 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
             <HistoryTab
               key="history"
               history={history}
-              setHistory={async (newHistory) => {
-                if (typeof newHistory === 'function') {
-                  setHistory(newHistory);
-                } else {
-                  setHistory(newHistory);
-                  clearHistory().catch(() => {});
-                }
-              }}
+              setHistory={setHistory}
               likedSet={likedSet}
               toggleLike={toggleLike}
               handleUpscale={handleUpscale}
               setFullscreenImage={setFullscreenImage}
-              videoHistory={videoHistory}
-              setVideoHistory={setVideoHistory}
-              likedVideoSet={likedVideoSet}
-              toggleVideoLike={toggleVideoLike}
-              setFullscreenVideo={setFullscreenVideo}
               onRefine={(url) => {
                 setBaseImage({ data: url, mimeType: 'image/png' });
                 setActiveTab('create');
@@ -2098,27 +1506,12 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
               favoriteAnalysisLoadingUrl={favoriteAnalysisLoadingUrl}
               handleUpscale={handleUpscale}
               setFullscreenImage={setFullscreenImage}
-              likedVideos={likedVideos}
-              likedVideoSet={likedVideoSet}
-              toggleVideoLike={toggleVideoLike}
-              videoFavoriteChoiceNotes={videoFavoriteChoiceNotes}
-              videoFavoriteAnalysisLoadingUrl={videoFavoriteAnalysisLoadingUrl}
-              setFullscreenVideo={setFullscreenVideo}
               onRefine={(url) => {
                 setBaseImage({ data: url, mimeType: 'image/png' });
                 setActiveTab('create');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
                 setTimeout(() => promptRef.current?.focus(), 100);
               }}
-            />
-          ) : activeTab === 'library' ? (
-            <LibraryTab
-              key="library"
-              cardLibrary={cardLibrary}
-              onSaveCard={handleSaveCard}
-              onDeleteCard={handleDeleteCard}
-              setFullscreenImage={setFullscreenImage}
-              isSaving={isSavingCard}
             />
           ) : activeTab === 'references' ? (
             <ReferencesTab
@@ -2133,13 +1526,12 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
             />
           ) : null}
             </Suspense>
-          </motion.div>
-        </AnimatePresence>
+          </div>
       </main>
 
       <AnimatePresence>
         {fullscreenImage && (
-          <React.Fragment key={fullscreenImage}>
+          <React.Fragment key="image-lightbox">
           <ImageLightbox
             imageUrl={fullscreenImage}
             onClose={() => setFullscreenImage(null)}
@@ -2150,12 +1542,6 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
             counterLabel={lightboxImages.length > 1 ? `${lightboxIndex + 1} / ${lightboxImages.length}` : null}
           />
           </React.Fragment>
-        )}
-        {fullscreenVideo && (
-          <VideoLightbox
-            videoUrl={fullscreenVideo}
-            onClose={() => setFullscreenVideo(null)}
-          />
         )}
       </AnimatePresence>
     </div>

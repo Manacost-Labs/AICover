@@ -6,7 +6,17 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import express from "express";
 import mysql from "mysql2/promise";
-import { buildOpenRouterImageRequest, extractOpenRouterImage } from "./openrouter-image.js";
+import {
+  OPENROUTER_IMAGE_MODELS,
+  acknowledgeOpenRouterJob,
+  buildOpenRouterImageRequest,
+  createOpenRouterBodyAdmission,
+  isOpenRouterEnabled,
+  requestOpenRouterImage,
+} from "./openrouter-image.js";
+import { createOpenRouterModelAvailability } from './openrouter-models.js';
+import { createChatGptRouter } from "./chatgpt-router.js";
+import { createEncryptedChatGptSessionStore } from "./chatgpt-session-store.js";
 
 dotenv.config({ path: process.env.COVER_IMAGE_ENV || "/etc/cover-image/cover-image.env" });
 
@@ -16,6 +26,13 @@ const distDir = path.join(rootDir, "dist");
 const uploadRoot = process.env.UPLOAD_ROOT || "/var/lib/cover-image/uploads";
 const publicUploadPrefix = "/uploads";
 const port = Number(process.env.PORT || 3127);
+const chatGptEnabled = process.env.COVER_CHATGPT_ENABLED === 'true';
+const chatGptSessionStore = chatGptEnabled
+  ? await createEncryptedChatGptSessionStore({
+      filePath: process.env.COVER_CHATGPT_SESSION_FILE || '/var/lib/cover-image/chatgpt/sessions.enc',
+      key: process.env.COVER_CHATGPT_SESSION_KEY,
+    })
+  : undefined;
 const imageProxyAllowedHosts = new Set([
   "art.hearthstonejson.com",
   "d15f34w2p8l1cc.cloudfront.net",
@@ -28,7 +45,13 @@ const openRouterRateWindowMs = 10 * 60 * 1000;
 const openRouterRateLimit = 12;
 const openRouterJobs = new Map();
 const openRouterJobTtlMs = 15 * 60 * 1000;
-const openRouterJobLimit = 60;
+// Terminal results remain available until acknowledgement or TTL. Four jobs
+// bound decoded/base64 result memory while keeping the editor usable.
+const openRouterJobLimit = 4;
+const openRouterBodyAdmission = createOpenRouterBodyAdmission(2);
+const openRouterModelAvailability = createOpenRouterModelAvailability({
+  modelIds: Object.keys(OPENROUTER_IMAGE_MODELS),
+});
 const geminiRateBuckets = new Map();
 const geminiRateWindowMs = 10 * 60 * 1000;
 const geminiRateLimit = Number(process.env.GEMINI_RATE_LIMIT || 30);
@@ -47,6 +70,20 @@ const uploadMimeExtensions = new Map([
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", "loopback");
+app.use('/api/chatgpt', createChatGptRouter({
+  enabled: chatGptEnabled,
+  origin: process.env.COVER_CHATGPT_ORIGIN,
+  sessionStore: chatGptSessionStore,
+  bindingCookie: 'cover_admin_session',
+}));
+// Parse this billable endpoint with its own hard ceiling before the larger
+// legacy upload parser. 24 MiB decoded references need roughly 32 MiB as base64.
+app.use(
+  '/api/thumbnail/openrouter-generate',
+  limitOpenRouterRequests,
+  openRouterBodyAdmission,
+  express.json({ limit: '34mb' }),
+);
 app.use(express.json({ limit: process.env.JSON_LIMIT || "150mb" }));
 
 const pool = mysql.createPool({
@@ -177,6 +214,10 @@ function limitOpenRouterRequests(req, _res, next) {
   next();
 }
 
+function openRouterClientKey(req) {
+  return req.ip || req.socket.remoteAddress || "unknown";
+}
+
 function limitGeminiGenerationRequests(req, _res, next) {
   // Video status polling and media delivery are GET requests; rate limiting
   // them with generation starts would break a normal long-running Veo job.
@@ -271,40 +312,6 @@ function cleanupOpenRouterJobs(now = Date.now()) {
   }
 }
 
-async function requestOpenRouterImage(requestBody, apiKey) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 300000);
-  try {
-    const upstream = await fetch("https://openrouter.ai/api/v1/images", {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://cover.hs-manacost.ru",
-        "X-Title": "Manacost Cover",
-      },
-      body: JSON.stringify(requestBody),
-    });
-    if (!upstream.ok) {
-      const status = upstream.status === 429 ? 429 : 502;
-      const message = upstream.status === 429
-        ? "Сервис генерации занят. Попробуйте немного позже."
-        : "GPT Image 2 не смог создать изображение";
-      throw Object.assign(new Error(message), { status });
-    }
-    const payload = await upstream.json();
-    return extractOpenRouterImage(payload);
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw Object.assign(new Error("Генерация превысила лимит времени"), { status: 504 });
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 function startOpenRouterJob(jobId, requestBody, apiKey) {
   void requestOpenRouterImage(requestBody, apiKey)
     .then((imageUrl) => {
@@ -317,10 +324,12 @@ function startOpenRouterJob(jobId, requestBody, apiKey) {
       if (!job) return;
       Object.assign(job, {
         status: "failed",
-        error: error?.message || "GPT Image 2 не смог создать изображение",
+        error: error?.message || "Выбранная модель OpenRouter не смогла создать изображение",
         errorStatus: Number(error?.status) || 502,
+        errorCode: typeof error?.code === 'string' ? error.code : 'PROVIDER_REJECTED',
         updatedAt: Date.now(),
       });
+      console.error(`[openrouter-job ${jobId}] model=${requestBody.model} code=${job.errorCode} status=${job.errorStatus}`);
     });
 }
 
@@ -331,8 +340,16 @@ app.get("/api/health", asyncHandler(async (_req, res) => {
 
 app.get("/api/runtime-capabilities", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.json({ gemini: Boolean(process.env.GEMINI_API_KEY) });
+  res.json({
+    gemini: Boolean(process.env.GEMINI_API_KEY),
+    openrouter: isOpenRouterEnabled(),
+  });
 });
+
+app.get('/api/thumbnail/openrouter-models', asyncHandler(async (_req, res) => {
+  res.setHeader('Cache-Control', 'private, max-age=60');
+  res.json({ models: await openRouterModelAvailability.list() });
+}));
 
 app.all("/api/gemini/*", limitGeminiGenerationRequests, asyncHandler(proxyGeminiRequest));
 
@@ -390,10 +407,10 @@ app.get("/api/image-proxy", asyncHandler(async (req, res) => {
   }
 }));
 
-app.post("/api/thumbnail/openrouter-generate", limitOpenRouterRequests, asyncHandler(async (req, res) => {
+app.post("/api/thumbnail/openrouter-generate", asyncHandler(async (req, res) => {
   const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    throw Object.assign(new Error("GPT Image 2 пока не настроен"), { status: 503 });
+  if (!isOpenRouterEnabled()) {
+    throw Object.assign(new Error("OpenRouter пока не включён"), { status: 503 });
   }
   const requestBody = buildOpenRouterImageRequest(req.body);
   cleanupOpenRouterJobs();
@@ -404,6 +421,7 @@ app.post("/api/thumbnail/openrouter-generate", limitOpenRouterRequests, asyncHan
   const now = Date.now();
   openRouterJobs.set(jobId, {
     status: "pending",
+    ownerKey: openRouterClientKey(req),
     createdAt: now,
     updatedAt: now,
   });
@@ -415,12 +433,17 @@ app.post("/api/thumbnail/openrouter-generate", limitOpenRouterRequests, asyncHan
 app.get("/api/thumbnail/openrouter-jobs/:jobId", asyncHandler(async (req, res) => {
   cleanupOpenRouterJobs();
   const job = openRouterJobs.get(req.params.jobId);
-  if (!job) {
+  if (!job || job.ownerKey !== openRouterClientKey(req)) {
     throw Object.assign(new Error("Задача генерации не найдена"), { status: 404 });
   }
   res.setHeader("Cache-Control", "no-store");
   if (job.status === "failed") {
-    res.status(job.errorStatus || 502).json({ status: "failed", error: job.error });
+    res.once("finish", () => openRouterJobs.delete(req.params.jobId));
+    res.status(job.errorStatus || 502).json({
+      status: "failed",
+      error: job.error,
+      code: job.errorCode || 'PROVIDER_REJECTED',
+    });
     return;
   }
   if (job.status === "complete") {
@@ -429,6 +452,13 @@ app.get("/api/thumbnail/openrouter-jobs/:jobId", asyncHandler(async (req, res) =
   }
   res.json({ status: "pending" });
 }));
+
+app.delete("/api/thumbnail/openrouter-jobs/:jobId", (req, res) => {
+  cleanupOpenRouterJobs();
+  acknowledgeOpenRouterJob(openRouterJobs, req.params.jobId, openRouterClientKey(req));
+  res.setHeader("Cache-Control", "no-store");
+  res.status(204).end();
+});
 
 app.get("/api/card-library", asyncHandler(async (_req, res) => {
   const [rows] = await pool.query(
@@ -615,6 +645,10 @@ app.use("/assets", express.static(path.join(distDir, "assets"), {
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Not found" });
 });
+app.get('/chatgpt/callback', (_req, res) => {
+  res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+  res.sendFile(path.join(distDir, 'index.html'));
+});
 app.use(express.static(distDir, {
   maxAge: "5m",
   setHeaders(res, filePath) {
@@ -632,7 +666,11 @@ app.use((err, _req, res, _next) => {
   const status = err.status || 500;
   const requestId = crypto.randomUUID();
   console.error(`[${requestId}]`, err);
-  res.status(status).json({ error: status === 500 ? "Internal server error" : err.message, requestId });
+  res.status(status).json({
+    error: status === 500 ? "Internal server error" : err.message,
+    ...(typeof err.code === 'string' ? { code: err.code } : {}),
+    requestId,
+  });
 });
 
 await fs.mkdir(uploadRoot, { recursive: true });

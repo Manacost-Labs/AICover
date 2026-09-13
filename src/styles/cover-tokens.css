@@ -1,0 +1,80 @@
+/* Normative palette: /srv/projects/web/AI-cover/design.md.
+   Compatibility aliases are intentionally retained for unmigrated tools. */
+:root {
+  color-scheme: light;
+  --cover-bg: #f3f4f1;
+  --cover-canvas: #ecefea;
+  --cover-surface: #fcfdfb;
+  --cover-surface-raised: #ffffff;
+  --cover-ink: #303b34;
+  --cover-secondary: #566158;
+  --cover-muted: #626d63;
+  --cover-line: #dce2d9;
+  --cover-line-strong: #7f8c80;
+  --cover-primary: #456b56;
+  --cover-primary-hover: #385b48;
+  --cover-primary-active: #2f4d3d;
+  --cover-primary-ink: #ffffff;
+  --cover-accent: #426951;
+  --cover-accent-hover: #385b48;
+  --cover-accent-ink: #ffffff;
+  --cover-accent-soft: #e4ede3;
+  --cover-accent-line: #426951;
+  --cover-selected-ink: #34553f;
+  --cover-subtle: #e8ede6;
+  --cover-disabled-bg: #ededeb;
+  --cover-disabled-text: #767970;
+  --cover-success: #276542;
+  --cover-warning: #88541a;
+  --cover-danger: #ae3535;
+  --cover-overlay: rgb(0 0 0 / 0.72);
+  --cover-shadow-sm: 0 1px 2px rgb(20 22 18 / 0.04);
+  --cover-shadow-md: 0 8px 24px rgb(20 22 18 / 0.1);
+  --cover-shadow: rgb(20 22 18 / 0.04);
+  --cover-radius-sm: 5px;
+  --cover-radius-md: 8px;
+  --cover-radius-lg: 10px;
+  --cover-radius-dialog: 12px;
+  --cover-motion-color: 120ms ease;
+  --cover-focus-width: 2px;
+  --cover-focus-color: var(--cover-accent);
+  --cover-panel: var(--cover-surface);
+  --cover-header: var(--cover-surface);
+  --cover-input: var(--cover-surface-raised);
+  --cover-nav-idle: var(--cover-subtle);
+  --cover-faint: var(--cover-muted);
+  --cover-glow: transparent;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --cover-bg: #232724;
+  --cover-canvas: #272e29;
+  --cover-surface: #2d342e;
+  --cover-surface-raised: #353e37;
+  --cover-ink: #e8eee6;
+  --cover-secondary: #c0ccbe;
+  --cover-muted: #a5b3a3;
+  --cover-line: #444e45;
+  --cover-line-strong: #81927f;
+  --cover-primary: #c3d8bd;
+  --cover-primary-hover: #d3e3ce;
+  --cover-primary-active: #aec7a7;
+  --cover-primary-ink: #293d2d;
+  --cover-accent: #b3cea9;
+  --cover-accent-hover: #c3d8bd;
+  --cover-accent-ink: #293d2d;
+  --cover-accent-soft: #3a4b3c;
+  --cover-accent-line: #b3cea9;
+  --cover-selected-ink: #d2e7c9;
+  --cover-subtle: #3b453c;
+  --cover-disabled-bg: #34382f;
+  --cover-disabled-text: #919889;
+  --cover-success: #93d3a9;
+  --cover-warning: #efc27e;
+  --cover-danger: #ffb4aa;
+  --cover-overlay: rgb(0 0 0 / 0.78);
+  --cover-shadow-sm: none;
+  --cover-shadow-md: 0 8px 24px rgb(0 0 0 / 0.3);
+  --cover-shadow: rgb(0 0 0 / 0.15);
+}
