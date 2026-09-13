@@ -290,6 +290,54 @@ describe('OpenRouter cover generation routing', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('does not start Vision after cancellation during delayed source preparation', async () => {
+    let resolveSource!: (response: Response) => void;
+    const delayedSource = new Promise<Response>((resolve) => { resolveSource = resolve; });
+    const fetchMock = vi.fn().mockReturnValueOnce(delayedSource);
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+    const work = generateFusedCover([
+      { data: '/uploads/slow-source.png', mimeType: 'image/png', role: 'left' },
+    ], null, {
+      model: 'x-ai/grok-imagine-image-2.0',
+      aspectRatio: '16:9',
+      imageSize: '2K',
+      prompt: 'One hero',
+      batchSize: 1,
+    }, null, [], null, undefined, controller.signal);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    controller.abort(new DOMException('Генерация отменена.', 'AbortError'));
+    await expect(work).rejects.toMatchObject({ name: 'AbortError' });
+
+    resolveSource(new Response('image-bytes', {
+      status: 200,
+      headers: { 'Content-Type': 'image/png' },
+    }));
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    expect(gemini.generateContent).not.toHaveBeenCalled();
+  });
+
+  it('does not launch Vision for a pre-aborted composition request', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+    controller.abort(new DOMException('Генерация отменена.', 'AbortError'));
+
+    await expect(generateFusedCover([
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', role: 'left' },
+    ], null, {
+      model: 'x-ai/grok-imagine-image-2.0',
+      aspectRatio: '16:9',
+      imageSize: '2K',
+      prompt: 'One hero',
+      batchSize: 1,
+    }, null, [], null, undefined, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    expect(gemini.generateContent).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('fails closed for held Muse before composing references or starting a paid request', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

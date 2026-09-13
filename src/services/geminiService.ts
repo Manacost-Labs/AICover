@@ -397,10 +397,15 @@ async function planFusionComposition(
       );
     });
   };
+  const throwIfPlannerAborted = () => controller.signal.throwIfAborted();
   try {
-    const raw = await abortable((async () => {
+    throwIfPlannerAborted();
+    const work = (async () => {
+      throwIfPlannerAborted();
       const ai = existingClient ?? await createGeminiClient();
+      throwIfPlannerAborted();
       const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
+      throwIfPlannerAborted();
       const parts: any[] = [{ text: buildCompositionPlannerPrompt(input) }];
       normalizedSources.forEach((source, index) => {
         parts.push({ text: fusionSourceVisionTag(sources[index], index) });
@@ -415,7 +420,8 @@ async function planFusionComposition(
         },
       });
       return response?.text || '';
-    })());
+    })();
+    const raw = await abortable(work);
     return resolveCompositionPlan(raw, input);
   } catch {
     if (signal?.aborted) {
