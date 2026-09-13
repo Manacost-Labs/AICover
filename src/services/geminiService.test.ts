@@ -189,6 +189,54 @@ describe('OpenRouter cover generation routing', () => {
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/thumbnail/openrouter-generate')).toHaveLength(1);
   });
 
+  it('sends one grounded depth plan to the selected OpenRouter image model', async () => {
+    gemini.generateContent.mockResolvedValueOnce({
+      text: JSON.stringify({
+        analyses: [
+          { sourceIndex: 0, visualWeight: 0.9, gaze: 'right', motion: 'right', mustRemainVisible: ['face', 'staff'], safeToOcclude: ['lower robe'], lighting: 'upper left' },
+          { sourceIndex: 1, visualWeight: 0.7, gaze: 'left', motion: 'left', mustRemainVisible: ['face'], safeToOcclude: ['lower armor'], lighting: 'front' },
+        ],
+        candidates: ['balanced', 'cinematic', 'tight'].map((id, index) => ({
+          id,
+          score: 90 - index,
+          camera: 'eye-level normal lens',
+          horizon: 0.58,
+          rationale: 'Keep the leading hero forward and both faces readable.',
+          placements: [
+            { sourceIndex: 0, role: 'hero', box: [0.06, 0.08, 0.42, 0.84], depth: 0.18, zIndex: 2, focalPriority: 1 },
+            { sourceIndex: 1, role: 'support', box: [0.58, 0.18, 0.34, 0.7], depth: 0.68, zIndex: 1, focalPriority: 2 },
+          ],
+        })),
+        selectedCandidateId: 'balanced',
+        summary: 'The leading hero stays in the foreground.',
+      }),
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ jobId: '9f8483e6-cb34-40fe-8a5c-73c4bc6beff7', status: 'pending' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'complete', imageUrl: 'data:image/png;base64,iVBORw0KGgo=' })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateFusedCover([
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', role: 'left' },
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', role: 'right' },
+    ], null, {
+      model: 'x-ai/grok-imagine-image-2.0',
+      aspectRatio: '16:9',
+      imageSize: '2K',
+      prompt: 'Two heroes in one scene',
+      batchSize: 1,
+    });
+
+    expect(gemini.generateContent).toHaveBeenCalledOnce();
+    const plannerRequest = gemini.generateContent.mock.calls[0][0];
+    expect(plannerRequest.contents.parts[0].text).toContain('exactly 3 candidates');
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.prompt).toContain('AI-SELECTED COMPOSITION PLAN (balanced, 16:9)');
+    expect(body.prompt).toContain('SOURCE 1: hero; foreground');
+    expect(body.prompt).toContain('Do not swap identities');
+  });
+
   it('fails closed for held Muse before composing references or starting a paid request', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

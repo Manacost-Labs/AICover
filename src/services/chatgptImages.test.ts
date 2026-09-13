@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CHATGPT_IMAGE_MODEL,
   ChatGPTImageError,
@@ -31,9 +31,16 @@ function gifBase64OfByteLength(byteLength: number): string {
 }
 
 describe('ChatGPT image proxy adapter', () => {
+  beforeEach(() => {
+    gemini.createGeminiClient.mockResolvedValue({
+      models: { generateContent: vi.fn().mockResolvedValue({ text: '' }) },
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    gemini.createGeminiClient.mockReset();
   });
 
   it.each(['https://example.invalid/art.jpg', '/uploads/art.jpg', '//example.invalid/art.jpg', 'data:image/jpeg;base64,/9j/', '', '   ', 'AA%=','AA==AA'])('rejects non-inline data %j before sending a request', async (data) => {
@@ -67,7 +74,8 @@ describe('ChatGPT image proxy adapter', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.references).toEqual(Array.from({ length: 4 }, () => ({ mimeType: 'image/jpeg', data: jpeg })));
-    expect(gemini.createGeminiClient).not.toHaveBeenCalled();
+    expect(body.prompt).toContain('AI-SELECTED COMPOSITION PLAN');
+    expect(gemini.createGeminiClient).toHaveBeenCalledOnce();
   });
 
   it('passes an uploaded JPEG through the thumbnail editor too', async () => {
@@ -387,7 +395,7 @@ describe('ChatGPT image proxy adapter', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('runs GPT cover variants sequentially, reports progress, and bypasses Gemini completely', async () => {
+  it('plans composition once, then runs GPT cover variants sequentially and reports progress', async () => {
     let finishFirst!: (response: Response) => void;
     const first = new Promise<Response>((resolve) => { finishFirst = resolve; });
     const fetchMock = vi.fn()
@@ -406,7 +414,7 @@ describe('ChatGPT image proxy adapter', () => {
       progress,
     );
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(gemini.createGeminiClient).not.toHaveBeenCalled();
+    expect(gemini.createGeminiClient).toHaveBeenCalledOnce();
 
     finishFirst(new Response(JSON.stringify({ imageUrl: 'data:image/png;base64,first' })));
     await expect(work).resolves.toEqual([
@@ -420,7 +428,7 @@ describe('ChatGPT image proxy adapter', () => {
       { done: 1, total: 2, phase: 'generating' },
       { done: 2, total: 2, phase: 'generating' },
     ]);
-    expect(gemini.createGeminiClient).not.toHaveBeenCalled();
+    expect(gemini.createGeminiClient).toHaveBeenCalledOnce();
   });
 
   it('stops a GPT batch after the current request is cancelled', async () => {

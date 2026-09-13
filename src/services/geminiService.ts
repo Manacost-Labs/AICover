@@ -1,6 +1,7 @@
 import type { GoogleGenAI } from "@google/genai";
 import { MODELS_SUPPORTING_IMAGE_SIZE, normalizeGeminiImageSettings } from "../constants";
 import { CHATGPT_IMAGE_MODEL, MAX_CHATGPT_IMAGE_REFERENCES, createChatGPTImageGenerator, prepareImageReferences, type ChatGPTImageReference } from "./chatgptImages";
+import { buildCompositionPlannerPrompt, formatCompositionPlan, resolveCompositionPlan, type CompositionPlan } from "./compositionPlanner";
 import { createGeminiClient } from "./geminiClient";
 import { generateOpenRouterImage, getOpenRouterModel, isOpenRouterImageModel, type OpenRouterImageReference } from "./openRouterImages";
 import { composeOpenRouterReferenceSheet } from "./openRouterReferenceComposer";
@@ -122,7 +123,6 @@ function dataUrlToImageSource(dataUrl: string): ImageSource {
   return { data: match[2], mimeType: match[1] };
 }
 
-const SOURCE_BRIEF_MAX_CHARS = 600;
 /** Limit parallel vision QA + refine calls in strict mode (429 / instability). */
 const STRICT_VISION_CONCURRENCY = 2;
 
@@ -132,16 +132,6 @@ function optionalGeminiReferenceLimit(model: string, requiredImages: number, des
   return model === "gemini-2.5-flash-image"
     ? Math.max(0, 3 - requiredImages)
     : desiredOptional;
-}
-
-/** Keep vision-derived briefs bounded (main generation prompt + tokens). */
-function truncateUtf16(text: string, maxLen: number): string {
-  const t = text.trim();
-  if (t.length <= maxLen) return t;
-  const cut = t.slice(0, maxLen);
-  const lastSpace = cut.lastIndexOf(" ");
-  const head = lastSpace > maxLen * 0.55 ? cut.slice(0, lastSpace) : cut;
-  return head.trimEnd() + "…";
 }
 
 /**
@@ -370,41 +360,34 @@ export async function analyzeFavoriteVideoChoiceVision(
   }
 }
 
-/** Vision: lock-list per source — colors, light, must-preserve details (English, compact). */
-async function analyzeSourceCharactersForFusion(
-  ai: GoogleGenAI,
-  sources: FusionSource[]
-): Promise<string> {
-  if (sources.length === 0) return "";
-  const parts: any[] = [
-    {
-      text: `You help a compositing pipeline. For each SOURCE image in order, write 3–6 SHORT lines in English:
-- Dominant colors / materials (for color matching)
-- Light direction (where highlights fall)
-- Silhouette and costume details that must NOT be redrawn or "improved"
-
-Separate characters with a line "---". Max ~500 characters total.`,
-    },
-  ];
-  sources.forEach((src, idx) => {
-    parts.push({ text: fusionSourceVisionTag(src, idx) });
-    parts.push({
-      inlineData: {
-        data: src.data.split(",")[1] || src.data,
-        mimeType: src.mimeType,
-      },
-    });
-  });
+async function planFusionComposition(
+  sources: FusionSource[],
+  settings: GenerationSettings,
+  existingClient?: GoogleGenAI,
+): Promise<CompositionPlan> {
+  const input = {
+    sourceCount: sources.length,
+    aspectRatio: settings.aspectRatio,
+    roles: sources.map(({ role }) => role),
+    userPrompt: settings.prompt,
+  };
   try {
-    const res = await ai.models.generateContent({
+    const ai = existingClient ?? await createGeminiClient();
+    const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
+    const parts: any[] = [{ text: buildCompositionPlannerPrompt(input) }];
+    normalizedSources.forEach((source, index) => {
+      parts.push({ text: fusionSourceVisionTag(sources[index], index) });
+      parts.push({ inlineData: source });
+    });
+    const response = await ai.models.generateContent({
       model: VISION_MODEL,
       contents: { parts },
+      config: { responseMimeType: 'application/json' },
     });
-    const raw = (res.text || "").trim();
-    return raw ? truncateUtf16(raw, SOURCE_BRIEF_MAX_CHARS) : "";
-  } catch (e) {
-    console.error("analyzeSourceCharactersForFusion", e);
-    return "";
+    return resolveCompositionPlan(response?.text || '', input);
+  } catch {
+    console.warn('Composition vision unavailable; using deterministic layout.');
+    return resolveCompositionPlan('', input);
   }
 }
 
@@ -412,7 +395,8 @@ Separate characters with a line "---". Max ~500 characters total.`,
 async function visionCheckFusionOutput(
   ai: GoogleGenAI,
   sources: FusionSource[],
-  outputDataUrl: string
+  outputDataUrl: string,
+  compositionPlan: CompositionPlan | null,
 ): Promise<{ pass: boolean; issues: string[] }> {
   let output: ImageSource;
   try {
@@ -423,9 +407,10 @@ async function visionCheckFusionOutput(
   const parts: any[] = [
     {
       text: `Strict QC: SOURCE images (order) vs OUTPUT. One combined scene expected.
-Check: (1) identity vs each SOURCE (2) single environment (3) unified lighting.
+Check: (1) identity vs each SOURCE (2) single environment (3) unified lighting (4) intended source side, scale, overlap, focal priority, and front-to-back order.
+${compositionPlan ? `EXPECTED PLAN:\n${formatCompositionPlan(compositionPlan)}` : ''}
 JSON only, no markdown: {"pass":true|false,"issues":["English",...]}
-pass=false if redrawn/unrecognizable vs SOURCE or obvious collage.`,
+pass=false if redrawn/unrecognizable vs SOURCE, obvious collage, swapped source positions, or materially wrong depth/layer order.`,
     },
   ];
   sources.forEach((src, idx) => {
@@ -471,7 +456,8 @@ async function refineFusionAfterVision(
   sources: FusionSource[],
   failedDataUrl: string,
   issues: string[],
-  likedImages: string[]
+  likedImages: string[],
+  compositionPlan: CompositionPlan | null,
 ): Promise<string | null> {
   const base = dataUrlToImageSource(failedDataUrl);
   const parts: any[] = [];
@@ -521,6 +507,7 @@ RULES:
 2) Fix ONLY: environment continuity, global lighting harmony, contact shadows, color grading — without changing character designs.
 3) NO "improving" or beautifying faces. NO new poses for characters.
 4) Single coherent background; no collage seams.
+${compositionPlan ? `5) Restore the intended position, scale, overlap, and depth:\n${formatCompositionPlan(compositionPlan)}` : ''}
 ${settings.prompt ? `USER NOTE (secondary): ${settings.prompt}` : ""}
 ${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}` : ""}`;
 
@@ -561,6 +548,7 @@ function chatGPTFusionPrompt(
   hasReference: boolean,
   qualityExampleCount: number,
   referenceCompositionNotes: string | null,
+  compositionPlan: CompositionPlan | null,
   variant: number,
 ): string {
   const customPrompt = hasBaseImage
@@ -582,6 +570,7 @@ ${referenceOrder.length ? `REFERENCE IMAGE ORDER (exact request order):\n${refer
 ${hasBaseImage ? 'A BASE IMAGE is included: refine its composition while retaining supplied source identities.' : ''}
 ${hasReference ? 'A COMPOSITION REFERENCE is included: use only its spatial/framing guidance, not its characters, text, logos, or palette.' : ''}
 ${referenceCompositionNotes?.trim() ? `COMPOSITION NOTES:\n${referenceCompositionNotes.trim()}` : ''}
+${compositionPlan ? formatCompositionPlan(compositionPlan) : ''}
 ${settings.strictMode ? 'STRICT IDENTITY MODE: prioritize source identity fidelity. Automated vision QA is unavailable for this model.' : ''}
 ${settings.prompt.trim() ? `USER REQUEST: ${settings.prompt.trim()}` : ''}
 ${settings.negativePrompt?.trim() ? `AVOID: ${settings.negativePrompt.trim()}` : 'AVOID: redrawing, changing faces, mutations, extra limbs, collage, split-screen.'}
@@ -611,6 +600,7 @@ async function generateChatGPTFusedCover(
   }
 
   onProgress?.({ done: 0, total: settings.batchSize, phase: 'preparing' });
+  const compositionPlan = baseImage ? null : await planFusionComposition(sources, settings);
   const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
   const normalizedReference = reference ? await normalizeImageSource(reference) : null;
   const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
@@ -633,7 +623,7 @@ async function generateChatGPTFusedCover(
   onProgress?.({ done: 0, total: settings.batchSize, phase: 'generating' });
   for (let index = 0; index < settings.batchSize; index++) {
     results.push(await generateImage(
-      chatGPTFusionPrompt(settings, sources, Boolean(normalizedBaseImage), Boolean(normalizedReference), references.length - normalizedSources.length - Number(Boolean(normalizedReference)) - Number(Boolean(normalizedBaseImage)), referenceCompositionNotes, index + 1),
+      chatGPTFusionPrompt(settings, sources, Boolean(normalizedBaseImage), Boolean(normalizedReference), references.length - normalizedSources.length - Number(Boolean(normalizedReference)) - Number(Boolean(normalizedBaseImage)), referenceCompositionNotes, compositionPlan, index + 1),
     ));
     onProgress?.({ done: index + 1, total: settings.batchSize, phase: 'generating' });
   }
@@ -674,6 +664,7 @@ async function generateOpenRouterFusedCover(
   }
 
   onProgress?.({ done: 0, total: settings.batchSize, phase: 'preparing' });
+  const compositionPlan = baseImage ? null : await planFusionComposition(sources, settings);
   const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
   const normalizedReference = reference ? await normalizeImageSource(reference) : null;
   const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
@@ -723,6 +714,7 @@ async function generateOpenRouterFusedCover(
         Boolean(normalizedReference),
         optionalExampleCount,
         referenceCompositionNotes,
+        compositionPlan,
         index + 1,
       ) + contactSheetPrompt,
       references,
@@ -773,7 +765,7 @@ export async function generateFusedCover(
   });
 
   let compositionDescription = "";
-  let sourceBrief = "";
+  let compositionPlan: CompositionPlan | null = null;
 
   if (!baseImage) {
     const storedNotes = referenceCompositionNotes?.trim();
@@ -808,11 +800,11 @@ export async function generateFusedCover(
               })
           : Promise.resolve();
 
-    const briefTask = analyzeSourceCharactersForFusion(ai, sources).then((b) => {
-      sourceBrief = b;
+    const plannerTask = planFusionComposition(sources, settings, ai).then((plan) => {
+      compositionPlan = plan;
     });
 
-    await Promise.all([refTask, briefTask]);
+    await Promise.all([refTask, plannerTask]);
   }
 
   const sceneLayout = !baseImage ? sceneLayoutBlock(sources) : "";
@@ -897,7 +889,7 @@ export async function generateFusedCover(
          8. PROMPT: ${settings.prompt ? `ONLY: ${settings.prompt}` : "Improve integration."}`
       : useCustomCreate
         ? `${settings.customSystemPromptCreate}
-    ${sourceBrief ? `\nSOURCE_LOCK (VISION ANALYSIS — DO NOT VIOLATE):\n${sourceBrief}` : ""}
+    ${compositionPlan ? `\n${formatCompositionPlan(compositionPlan)}` : ""}
     ${settings.strictMode ? `\nSTRICT MODE: If any conflict, prioritize exact match to SOURCE CHARACTER pixels over creativity.` : ""}
     ${sceneLayout ? sceneLayout : ""}
     ${compositionDescription ? `LAYOUT (reference template — spatial only):\n- ${compositionDescription}\n- Do NOT copy template scenery, palette, or character designs from the template.\n- Match scale and framing only.` : ""}`
@@ -911,9 +903,8 @@ export async function generateFusedCover(
     5. ENVIRONMENT: One new coherent background; light wraps BOTH characters consistently (no split-screen lighting).
     6. NO COLLAGE: No visible seams, no duplicated horizons, no mismatched color grades left vs right.
     7. GROUNDING: Contact shadows; feet on shared ground plane.
-    ${sourceBrief ? `
-    SOURCE_LOCK (VISION ANALYSIS — DO NOT VIOLATE):
-    ${sourceBrief}
+    ${compositionPlan ? `
+    ${formatCompositionPlan(compositionPlan)}
     ` : ""}
     ${settings.strictMode ? `
     STRICT MODE: If any conflict, prioritize exact match to SOURCE CHARACTER pixels over creativity.` : ""}
@@ -978,10 +969,10 @@ export async function generateFusedCover(
     });
     const runStrict = async (url: string): Promise<string> => {
       try {
-        const { pass, issues } = await visionCheckFusionOutput(ai, sources, url);
+        const { pass, issues } = await visionCheckFusionOutput(ai, sources, url, compositionPlan);
         if (pass) return url;
         const issueList = issues.length ? issues : ["Scene or identity coherence failed automated vision check"];
-        const refined = await refineFusionAfterVision(ai, model, settings, sources, url, issueList, likedImages);
+        const refined = await refineFusionAfterVision(ai, model, settings, sources, url, issueList, likedImages, compositionPlan);
         return refined || url;
       } catch (e) {
         console.error("strictMode vision QA", e);
