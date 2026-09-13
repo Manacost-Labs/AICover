@@ -21,10 +21,10 @@ const REVIEWED_COMMIT_ENV = 'COVER_RELEASE_COMMIT';
 const BUILD_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
 const EXPECTED_BASELINE = Object.freeze({
-  index: 'fa8d50cb041adb0fc88e32e1752e409ce0b4ed44471945bd0b43f7329036b079',
-  server: 'bbaef641d9646289e304fac36c20fea385169f1022f568ce2de9839be307bdfc',
-  openrouter: '52c80d9f0278baf8e5b78f16b5a048db0511c079f7c68d208bde27488c5cef6f',
-  models: 'ffdcbd26b7c00414851b901b85026a10e2d884feeaf3063307f26f7f1e5f55f9',
+  index: '45c6982e08d2b3a8204e34e632feb6e99f66bf0bcc4eb5b278a685c127e43ee3',
+  server: '05dd9d12f272c48f2e17684a27df35819ff8c49a6d5215ef52e8c39c00217d53',
+  openrouter: '75bcc427491e0d174d3b41a3eef36483c680a076a7026792f9c6abe65f7b160a',
+  models: '450137cac88bbadbce5af40fa3982e2d7b51798e6fbf4216fdd224c02bd85223',
 });
 
 const STATIC_GUARDS = Object.freeze({
