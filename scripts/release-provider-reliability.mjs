@@ -253,8 +253,16 @@ export async function rollback({ saved = BACKUP, targets = liveTargets, hooks = 
   return { rolledBack: true, restoredIndex: manifest.files.index.previous };
 }
 
-export async function publish({ saved = BACKUP, app = APP, targets = liveTargets, hooks = async () => {}, write = atomic } = {}) {
+export async function publish({
+  saved = BACKUP,
+  app = APP,
+  targets = liveTargets,
+  hooks = async () => {},
+  preflight = async () => {},
+  write = atomic,
+} = {}) {
   const manifest = await validateArchive(saved);
+  await preflight();
   for (const [key, descriptor] of Object.entries(manifest.files)) {
     assert.equal(await currentTargetHash(targets[key], descriptor), descriptor.previous, `Preflight drift: ${key}`);
   }
@@ -407,7 +415,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   if (mode === 'capture') console.log(JSON.stringify(await capture()));
   if (mode === 'rehearse') console.log(JSON.stringify(await rehearse()));
-  if (mode === 'deploy') console.log(JSON.stringify({ ...await publish({ hooks: liveHooks }), verified: true }));
+  if (mode === 'deploy') console.log(JSON.stringify({
+    ...await publish({ hooks: liveHooks, preflight: assertStaticGuards }),
+    verified: true,
+  }));
   if (mode === 'verify') console.log(JSON.stringify(await verifyLive()));
   if (mode === 'rollback') console.log(JSON.stringify(await rollback({ hooks: liveHooks })));
 }

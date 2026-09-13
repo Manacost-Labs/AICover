@@ -110,6 +110,18 @@ test('publishes backend before the index and restores the exact baseline', async
   for (const [key, descriptor] of Object.entries(release.manifest.files)) assert.equal(await hash(release.targets[key]), descriptor.previous);
 });
 
+test('a failed live preflight does not add assets or mutate a target', async () => {
+  const release = await fixture();
+  await assert.rejects(publish({
+    ...release,
+    preflight: async () => { throw new Error('static guard drift'); },
+  }), /static guard drift/);
+  for (const [key, descriptor] of Object.entries(release.manifest.files)) {
+    assert.equal(await hash(release.targets[key]), descriptor.previous);
+  }
+  await assert.rejects(fs.lstat(`${release.app}/dist/assets/new.js`), (error) => error.code === 'ENOENT');
+});
+
 for (const failure of ['written:models', 'written:openrouter', 'written:server', 'backend', 'index', 'verify']) {
   test(`failure at ${failure} restores the previous release`, async () => {
     const release = await fixture();
