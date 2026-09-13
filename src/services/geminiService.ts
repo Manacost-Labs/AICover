@@ -8,6 +8,7 @@ import { composeOpenRouterReferenceSheet } from "./openRouterReferenceComposer";
 
 /** Multimodal vision for composition / QA (not the image generator). */
 const VISION_MODEL = "gemini-3.1-flash-lite-preview";
+const COMPOSITION_PLANNER_TIMEOUT_MS = 8_000;
 
 export const DEFAULT_SYSTEM_PROMPT_CREATE =
 `TASK: MASTER COMPOSITING — PHOTO-COMPOSITE, NOT RE-ILLUSTRATION.
@@ -364,6 +365,7 @@ async function planFusionComposition(
   sources: FusionSource[],
   settings: GenerationSettings,
   existingClient?: GoogleGenAI,
+  signal?: AbortSignal,
 ): Promise<CompositionPlan> {
   const input = {
     sourceCount: sources.length,
@@ -371,23 +373,61 @@ async function planFusionComposition(
     roles: sources.map(({ role }) => role),
     userPrompt: settings.prompt,
   };
+  const controller = new AbortController();
+  const onUserAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) onUserAbort();
+  else signal?.addEventListener('abort', onUserAbort, { once: true });
+  const timer = window.setTimeout(() => {
+    controller.abort(new DOMException('Composition planning deadline exceeded.', 'TimeoutError'));
+  }, COMPOSITION_PLANNER_TIMEOUT_MS);
+  const abortable = <T>(promise: Promise<T>): Promise<T> => {
+    if (controller.signal.aborted) return Promise.reject(controller.signal.reason);
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(controller.signal.reason);
+      controller.signal.addEventListener('abort', onAbort, { once: true });
+      promise.then(
+        (value) => {
+          controller.signal.removeEventListener('abort', onAbort);
+          resolve(value);
+        },
+        (error) => {
+          controller.signal.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+      );
+    });
+  };
   try {
-    const ai = existingClient ?? await createGeminiClient();
-    const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
-    const parts: any[] = [{ text: buildCompositionPlannerPrompt(input) }];
-    normalizedSources.forEach((source, index) => {
-      parts.push({ text: fusionSourceVisionTag(sources[index], index) });
-      parts.push({ inlineData: source });
-    });
-    const response = await ai.models.generateContent({
-      model: VISION_MODEL,
-      contents: { parts },
-      config: { responseMimeType: 'application/json' },
-    });
-    return resolveCompositionPlan(response?.text || '', input);
+    const raw = await abortable((async () => {
+      const ai = existingClient ?? await createGeminiClient();
+      const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
+      const parts: any[] = [{ text: buildCompositionPlannerPrompt(input) }];
+      normalizedSources.forEach((source, index) => {
+        parts.push({ text: fusionSourceVisionTag(sources[index], index) });
+        parts.push({ inlineData: source });
+      });
+      const response = await ai.models.generateContent({
+        model: VISION_MODEL,
+        contents: { parts },
+        config: {
+          responseMimeType: 'application/json',
+          abortSignal: controller.signal,
+        },
+      });
+      return response?.text || '';
+    })());
+    return resolveCompositionPlan(raw, input);
   } catch {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException('Генерация отменена.', 'AbortError');
+    }
     console.warn('Composition vision unavailable; using deterministic layout.');
     return resolveCompositionPlan('', input);
+  } finally {
+    window.clearTimeout(timer);
+    signal?.removeEventListener('abort', onUserAbort);
   }
 }
 
@@ -600,7 +640,7 @@ async function generateChatGPTFusedCover(
   }
 
   onProgress?.({ done: 0, total: settings.batchSize, phase: 'preparing' });
-  const compositionPlan = baseImage ? null : await planFusionComposition(sources, settings);
+  const compositionPlan = baseImage ? null : await planFusionComposition(sources, settings, undefined, signal);
   const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
   const normalizedReference = reference ? await normalizeImageSource(reference) : null;
   const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
@@ -664,7 +704,7 @@ async function generateOpenRouterFusedCover(
   }
 
   onProgress?.({ done: 0, total: settings.batchSize, phase: 'preparing' });
-  const compositionPlan = baseImage ? null : await planFusionComposition(sources, settings);
+  const compositionPlan = baseImage ? null : await planFusionComposition(sources, settings, undefined, signal);
   const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
   const normalizedReference = reference ? await normalizeImageSource(reference) : null;
   const normalizedBaseImage = baseImage ? await normalizeImageSource(baseImage) : null;
@@ -800,7 +840,7 @@ export async function generateFusedCover(
               })
           : Promise.resolve();
 
-    const plannerTask = planFusionComposition(sources, settings, ai).then((plan) => {
+    const plannerTask = planFusionComposition(sources, settings, ai, signal).then((plan) => {
       compositionPlan = plan;
     });
 

@@ -194,6 +194,18 @@ const validExplicitSide = (placement: CompositionPlacement, role: SourceRole | u
   return center >= 0.3 && center <= 0.7;
 };
 
+const hasConsistentDepthOrder = (placements: CompositionPlacement[]): boolean => {
+  for (let first = 0; first < placements.length; first += 1) {
+    for (let second = first + 1; second < placements.length; second += 1) {
+      const a = placements[first];
+      const b = placements[second];
+      if (a.depth < b.depth && a.zIndex <= b.zIndex) return false;
+      if (a.depth > b.depth && a.zIndex >= b.zIndex) return false;
+    }
+  }
+  return true;
+};
+
 const normalizePlacement = (
   value: unknown,
   sourceCount: number,
@@ -233,6 +245,7 @@ const normalizeCandidate = (
   const priorities = normalizedPlacements.map(({ focalPriority }) => focalPriority);
   if (new Set(sourceIndexes).size !== input.sourceCount || new Set(zIndexes).size !== input.sourceCount || new Set(priorities).size !== input.sourceCount) return null;
   if (!normalizedPlacements.every((placement) => validExplicitSide(placement, input.roles[placement.sourceIndex]))) return null;
+  if (!hasConsistentDepthOrder(normalizedPlacements)) return null;
   if (!finite(item.score) || !finite(item.horizon) || item.horizon < 0 || item.horizon > 1) return null;
   return {
     id: boundedText(item.id, '', 48),
@@ -306,20 +319,28 @@ Provide exactly one analysis per source and exactly 3 candidates. Each candidate
 const depthLabel = (depth: number): string =>
   depth <= 0.33 ? 'foreground' : depth <= 0.66 ? 'midground' : 'background';
 
-const percent = (value: number): number => Math.round(value * 100);
+const percent = (value: number): number => Math.round(clamp(value, 0, 1) * 100);
 
 export const formatCompositionPlan = (plan: CompositionPlan): string => {
   const selected = plan.selected;
-  const sources = [...selected.placements]
+  const placements = [...selected.placements]
     .sort((a, b) => a.sourceIndex - b.sourceIndex)
     .map((placement) => {
       const analysis = plan.analyses[placement.sourceIndex];
       const [x, y, width, height] = placement.box;
-      return `SOURCE ${placement.sourceIndex + 1}: ${placement.role}; ${depthLabel(placement.depth)}; box ${percent(x)}%,${percent(y)}% / ${percent(width)}%x${percent(height)}%; layer ${placement.zIndex}; focus ${placement.focalPriority}. Keep visible: ${analysis.mustRemainVisible.slice(0, 2).join(', ')}. Occlude only if needed: ${analysis.safeToOcclude.slice(0, 2).join(', ')}.`;
-    })
-    .join('\n');
-  return `AI-SELECTED COMPOSITION PLAN (${selected.id}, ${plan.aspectRatio})
-Camera: ${selected.camera}; horizon ${percent(selected.horizon)}%. ${plan.summary}
+      return {
+        placement: `SOURCE ${placement.sourceIndex + 1}: ${placement.role}; ${depthLabel(placement.depth)}; box ${percent(x)}%,${percent(y)}% / ${percent(width)}%x${percent(height)}%; layer ${placement.zIndex}; focus ${placement.focalPriority}; preserve ${boundedText(analysis.mustRemainVisible[0], 'face', 32)}.`,
+        details: `SOURCE ${placement.sourceIndex + 1} DETAILS: keep ${analysis.mustRemainVisible.slice(0, 2).map((item) => boundedText(item, '', 36)).filter(Boolean).join(', ')}; occlude only ${analysis.safeToOcclude.slice(0, 2).map((item) => boundedText(item, '', 36)).filter(Boolean).join(', ')}.`,
+      };
+    });
+  const mandatory = `AI-SELECTED COMPOSITION PLAN (${boundedText(selected.id, 'selected', 48)}, ${boundedText(plan.aspectRatio, '16:9', 12)})
+Camera: ${boundedText(selected.camera, 'eye-level normal lens', 96)}; horizon ${percent(selected.horizon)}%. ${boundedText(plan.summary, selected.rationale, 180)}
 Do not swap identities, sides, focal priority, depth order, or layer order. Preserve recognizable faces, silhouettes, costume geometry, and source-specific lighting cues. Treat boxes as composition targets, not crop instructions; keep required details inside the frame.
-${sources}`.slice(0, 1_799);
+${placements.map(({ placement }) => placement).join('\n')}`;
+  let result = mandatory;
+  for (const { details } of placements) {
+    if (result.length + details.length + 1 >= 1_800) break;
+    result += `\n${details}`;
+  }
+  return result;
 };

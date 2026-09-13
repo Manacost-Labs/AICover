@@ -115,6 +115,7 @@ describe('OpenRouter cover generation routing', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it('optimizes an uploaded source over 10 MiB before starting a Seedream job', async () => {
@@ -235,6 +236,58 @@ describe('OpenRouter cover generation routing', () => {
     expect(body.prompt).toContain('AI-SELECTED COMPOSITION PLAN (balanced, 16:9)');
     expect(body.prompt).toContain('SOURCE 1: hero; foreground');
     expect(body.prompt).toContain('Do not swap identities');
+  });
+
+  it('uses the safe layout after a short planner deadline instead of delaying OpenRouter', async () => {
+    vi.useFakeTimers();
+    gemini.generateContent.mockReturnValueOnce(new Promise(() => {}));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ jobId: '9f8483e6-cb34-40fe-8a5c-73c4bc6beff7', status: 'pending' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'complete', imageUrl: 'data:image/png;base64,iVBORw0KGgo=' })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const work = generateFusedCover([
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', role: 'left' },
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', role: 'right' },
+    ], null, {
+      model: 'x-ai/grok-imagine-image-2.0',
+      aspectRatio: '16:9',
+      imageSize: '2K',
+      prompt: 'Two heroes in one scene',
+      batchSize: 1,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gemini.generateContent).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(work).resolves.toEqual(['data:image/png;base64,iVBORw0KGgo=']);
+    const plannerRequest = gemini.generateContent.mock.calls[0][0];
+    expect(plannerRequest.config.abortSignal.aborted).toBe(true);
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.prompt).toContain('AI-SELECTED COMPOSITION PLAN (balanced-depth, 16:9)');
+  });
+
+  it('propagates user cancellation while the composition planner is pending', async () => {
+    gemini.generateContent.mockReturnValueOnce(new Promise(() => {}));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+    const work = generateFusedCover([
+      { data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png', role: 'left' },
+    ], null, {
+      model: 'x-ai/grok-imagine-image-2.0',
+      aspectRatio: '16:9',
+      imageSize: '2K',
+      prompt: 'One hero',
+      batchSize: 1,
+    }, null, [], null, undefined, controller.signal);
+    await Promise.resolve();
+    await Promise.resolve();
+    controller.abort(new DOMException('Генерация отменена.', 'AbortError'));
+
+    await expect(work).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('fails closed for held Muse before composing references or starting a paid request', async () => {
