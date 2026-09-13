@@ -174,9 +174,10 @@ async function addCandidateAssets(saved, app, manifest) {
     const previousHash = manifest.previousDist[relative] ?? null;
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o755 });
     if (previousHash === null) {
-      await fs.copyFile(source, target, constants.COPYFILE_EXCL);
-      await fs.chown(target, manifest.index.owner.uid, manifest.index.owner.gid);
-      await fs.chmod(target, 0o644);
+      await atomic(target, await fs.readFile(source), null, {
+        ...manifest.index.owner,
+        mode: 0o644,
+      });
     } else if (previousHash !== candidateHash) {
       await atomic(target, await fs.readFile(source), previousHash, await owner(target));
     }
