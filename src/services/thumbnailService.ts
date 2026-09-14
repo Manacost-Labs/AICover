@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import { createGeminiClient } from './geminiClient';
 import { buildAiThumbnailPrompt } from '../features/thumbnail/prompt';
 import type {
   GeneratedThumbnailBackground,
@@ -233,10 +234,7 @@ export async function generateHearthstoneThumbnailBackgrounds(
 ): Promise<GeneratedThumbnailBackground[]> {
   if (assets.length === 0) throw new Error('Добавьте хотя бы один игровой ассет');
   const usesOpenRouter = settings.model === 'openai/gpt-image-2';
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!usesOpenRouter && !apiKey) throw new Error('GEMINI_API_KEY не настроен');
-
-  const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+  const ai = usesOpenRouter ? null : createGeminiClient();
   const references = await Promise.all(assets.slice(0, 4).map(assetToInline));
   let completed = 0;
 

@@ -589,6 +589,20 @@ export const CreateTab: React.FC<CreateTabProps> = ({
                   </button>
                 </div>
 
+                {!baseImage && (
+                  <div className="flex items-center justify-between gap-4 p-4 bg-zinc-900/50 rounded-2xl border border-white/5">
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-zinc-300">Сохранить исходный арт</label>
+                      <p className="text-[10px] text-zinc-500">Персонажи вырезаются сервером и накладываются без перерисовки.</p>
+                    </div>
+                    <button type="button" role="switch" aria-checked={settings.preserveExactArt}
+                      onClick={() => setSettings((s: any) => ({ ...s, preserveExactArt: !s.preserveExactArt }))}
+                      className={`relative inline-flex h-8 w-[52px] shrink-0 cursor-pointer items-center rounded-full border border-white/10 p-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/60 ${settings.preserveExactArt ? 'bg-indigo-600' : 'bg-zinc-700'}`}>
+                      <span className={`pointer-events-none block h-6 w-6 rounded-full bg-white shadow-md transition-transform duration-200 ease-out ${settings.preserveExactArt ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                )}
+
               </div>
           </section>
         </div>

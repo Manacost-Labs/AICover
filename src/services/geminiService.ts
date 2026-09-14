@@ -1,4 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
+import { createGeminiClient } from './geminiClient';
+import { resolveCompositionPlan } from './compositionPlanner';
+import { compositeExactArtScene, preflightExactArtRaster } from './exactArtComposer';
+import { prepareSubjectLayers } from './subjectLayer';
 import { MODELS_SUPPORTING_IMAGE_SIZE } from "../constants";
 
 /** Multimodal vision for composition / QA (not the image generator). */
@@ -47,6 +51,7 @@ export interface GenerationSettings {
   strictMode?: boolean;
   customSystemPromptCreate?: string;
   customSystemPromptEdit?: string;
+  preserveExactArt?: boolean;
 }
 
 export interface ImageSource {
@@ -272,11 +277,7 @@ Rules:
  * Returns JSON string or raw model text if JSON parsing fails downstream.
  */
 export async function analyzeReferenceCompositionVision(image: ImageSource): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   try {
     const res = await generateContentWithRetry(ai, {
       model: VISION_MODEL,
@@ -326,11 +327,7 @@ export async function analyzeFavoriteChoiceVision(
   alternatives: ImageSource[],
   options?: { userPromptHint?: string }
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   const hint = options?.userPromptHint?.trim();
   const parts: any[] = [
     {
@@ -549,6 +546,47 @@ export type CoverGenerationProgress = {
   phase: 'preparing' | 'generating' | 'strict';
 };
 
+/**
+ * Generates only a background plate and composites source RGB locally. This is
+ * intentionally separate from the legacy fusion path: source characters never
+ * reach an image generator while Exact Art is enabled.
+ */
+async function generateExactArtFusedCover(
+  sources: FusionSource[],
+  reference: ImageSource | null,
+  settings: GenerationSettings,
+  likedImages: string[],
+  referenceCompositionNotes: string | null,
+  onProgress?: (p: CoverGenerationProgress) => void,
+): Promise<string[]> {
+  if (sources.length < 2) throw new Error('Для точной композиции нужно хотя бы два исходных изображения.');
+  const normalizedSources = await Promise.all(sources.map(normalizeImageSource));
+  for (const source of normalizedSources) {
+    const dataUrl = `data:${source.mimeType};base64,${source.data}`;
+    preflightExactArtRaster(dataUrl);
+  }
+  onProgress?.({ done: 0, total: settings.batchSize, phase: 'preparing' });
+  const plan = resolveCompositionPlan('', {
+    sourceCount: sources.length,
+    aspectRatio: settings.aspectRatio,
+    roles: sources.map((source) => source.role),
+    userPrompt: settings.prompt,
+  });
+  const layers = await prepareSubjectLayers(normalizedSources);
+  onProgress?.({ done: 0, total: settings.batchSize, phase: 'generating' });
+  const backgroundPrompt = `Create a complete cinematic fantasy BACKGROUND PLATE ONLY. Do not draw people, creatures, faces, limbs, armor, silhouettes, statues, or character shadows. Leave clear, naturally integrated space for later protected character layers. Use one coherent environment, a visible ground plane, purposeful foreground and depth; no empty void. User direction: ${settings.prompt || 'dramatic fantasy cover'}.`;
+  const backgrounds = await generateFusedCover(
+    [], reference, { ...settings, prompt: backgroundPrompt, strictMode: false, preserveExactArt: false },
+    null, likedImages, referenceCompositionNotes,
+  );
+  const results: string[] = [];
+  for (let index = 0; index < backgrounds.length; index += 1) {
+    results.push(await compositeExactArtScene({ background: backgrounds[index], sources: normalizedSources, layers, plan }));
+    onProgress?.({ done: index + 1, total: settings.batchSize, phase: 'generating' });
+  }
+  return results;
+}
+
 export async function generateFusedCover(
   sources: FusionSource[],
   reference: ImageSource | null,
@@ -558,12 +596,11 @@ export async function generateFusedCover(
   referenceCompositionNotes: string | null = null,
   onProgress?: (p: CoverGenerationProgress) => void
 ): Promise<string[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
+  if (settings.preserveExactArt && !baseImage && sources.length >= 2) {
+    return generateExactArtFusedCover(sources, reference, settings, likedImages, referenceCompositionNotes, onProgress);
   }
 
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   const model = settings.model;
 
   onProgress?.({
@@ -813,12 +850,7 @@ export async function upscaleImage(
   targetSize: "1K" | "2K" | "4K" = "4K",
   model: string = "gemini-3.1-flash-image-preview"
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   const normalized = await normalizeImageSource(image);
 
   const imageConfig: any = {};
@@ -863,12 +895,7 @@ export async function expandImage(
   prompt: string = "",
   model: string = "gemini-3.1-flash-image-preview"
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient();
   const normalized = await normalizeImageSource(image);
 
   const response = await generateContentWithRetry(ai, {

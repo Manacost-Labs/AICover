@@ -15,11 +15,13 @@ import {
   requestOpenRouterImage,
 } from "./openrouter-image.js";
 import { createOpenRouterModelAvailability } from './openrouter-models.js';
+import { createBriaBodyAdmission, createBriaRequestRateLimiter, createBriaRmbgService, isBriaEnabled, sanitizeBriaBodyError } from './bria-rmbg.js';
 import { createChatGptRouter } from "./chatgpt-router.js";
 import { createEncryptedChatGptSessionStore } from "./chatgpt-session-store.js";
 import { staticAssetCacheOptions } from "./staticAssetCache.js";
 
 dotenv.config({ path: process.env.COVER_IMAGE_ENV || "/etc/cover-image/cover-image.env" });
+dotenv.config({ path: process.env.BRIA_ENV || '/etc/cover-image/bria.env', quiet: true });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -53,6 +55,27 @@ const openRouterBodyAdmission = createOpenRouterBodyAdmission(2);
 const openRouterModelAvailability = createOpenRouterModelAvailability({
   modelIds: Object.keys(OPENROUTER_IMAGE_MODELS),
 });
+const boundedPositiveInteger = (value, fallback, maximum) => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, maximum) : fallback;
+};
+const briaConcurrency = boundedPositiveInteger(process.env.BRIA_RMBG_CONCURRENCY, 2, 4);
+const briaRmbgService = isBriaEnabled()
+  ? createBriaRmbgService({
+      apiToken: process.env.BRIA_API_TOKEN,
+      cacheDir: process.env.BRIA_RMBG_CACHE_DIR || '/var/lib/cover-image/bria-rmbg-cache',
+      timeoutMs: boundedPositiveInteger(process.env.BRIA_RMBG_TIMEOUT_MS, 120_000, 300_000),
+      providerConcurrency: briaConcurrency,
+      cacheMaxBytes: boundedPositiveInteger(process.env.BRIA_RMBG_CACHE_MAX_BYTES, 512 * 1024 * 1024, 4 * 1024 * 1024 * 1024),
+      cacheMaxEntries: boundedPositiveInteger(process.env.BRIA_RMBG_CACHE_MAX_ENTRIES, 128, 512),
+      providerBudgetLimit: boundedPositiveInteger(process.env.BRIA_RMBG_GLOBAL_RATE_LIMIT, 30, 10_000),
+      providerBudgetWindowMs: boundedPositiveInteger(process.env.BRIA_RMBG_GLOBAL_RATE_WINDOW_MS, 10 * 60 * 1000, 24 * 60 * 60 * 1000),
+    })
+  : null;
+if (briaRmbgService) await briaRmbgService.ready().catch((error) => console.error(`[bria-rmbg] disabled code=${error?.code || 'CACHE_UNAVAILABLE'}`));
+const isBriaRmbgReady = () => Boolean(briaRmbgService?.isReady());
+const briaBodyAdmission = createBriaBodyAdmission(briaConcurrency);
+const limitBriaRequests = createBriaRequestRateLimiter({ limit: boundedPositiveInteger(process.env.BRIA_RMBG_RATE_LIMIT, 20, 100), windowMs: 10 * 60 * 1000, maxBuckets: 1_000 });
 const geminiRateBuckets = new Map();
 const geminiRateWindowMs = 10 * 60 * 1000;
 const geminiRateLimit = Number(process.env.GEMINI_RATE_LIMIT || 30);
@@ -85,6 +108,7 @@ app.use(
   openRouterBodyAdmission,
   express.json({ limit: '34mb' }),
 );
+app.use('/api/image/remove-background', briaBodyAdmission, limitBriaRequests, express.json({ limit: '15mb' }), sanitizeBriaBodyError);
 app.use(express.json({ limit: process.env.JSON_LIMIT || "150mb" }));
 
 const pool = mysql.createPool({
@@ -349,6 +373,7 @@ app.get("/api/runtime-capabilities", (_req, res) => {
   res.json({
     gemini: Boolean(process.env.GEMINI_API_KEY),
     openrouter: isOpenRouterEnabled(),
+    briaRmbg: isBriaRmbgReady(),
   });
 });
 
@@ -411,6 +436,19 @@ app.get("/api/image-proxy", asyncHandler(async (req, res) => {
   } finally {
     clearTimeout(timeout);
   }
+}));
+
+app.post('/api/image/remove-background', asyncHandler(async (req, res) => {
+  if (!briaRmbgService || !isBriaRmbgReady()) {
+    throw Object.assign(new Error('Точное выделение персонажей пока не настроено'), {
+      status: 503,
+      code: 'BRIA_DISABLED',
+    });
+  }
+  const result = await briaRmbgService.removeBackground(req.body);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.json(result);
 }));
 
 app.post("/api/thumbnail/openrouter-generate", asyncHandler(async (req, res) => {

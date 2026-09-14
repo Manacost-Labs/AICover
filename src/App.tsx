@@ -230,7 +230,8 @@ function AppContent() {
     prompt: "",
     negativePrompt: "",
     batchSize: 1,
-    strictMode: true
+    strictMode: true,
+    preserveExactArt: true,
   });
   const [upscaleSettings, setUpscaleSettings] = useState<{ model: string, imageSize: "1K" | "2K" | "4K" }>({
     model: "gemini-3.1-flash-image-preview",
@@ -264,6 +265,7 @@ function AppContent() {
   const [isDraggingRef, setIsDraggingRef] = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [hasKey, setHasKey] = useState(false);
+  const [hasBriaRmbg, setHasBriaRmbg] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'prompt' | 'settings' | 'preview'>('prompt');
@@ -479,12 +481,15 @@ function AppContent() {
         const selected = await window.aistudio.hasSelectedApiKey();
         setHasKey(selected);
       } else {
-        // Standalone / Vercel — key is baked in at build time via GEMINI_API_KEY env var
-        setHasKey(!!process.env.GEMINI_API_KEY);
+        const response = await fetch('/api/runtime-capabilities', { credentials: 'same-origin' });
+        const capabilities = response.ok ? await response.json() : null;
+        setHasKey(capabilities?.gemini === true);
+        setHasBriaRmbg(capabilities?.briaRmbg === true);
       }
     } catch (e) {
       console.error("Ошибка проверки ключа", e);
-      setHasKey(!!process.env.GEMINI_API_KEY);
+      setHasKey(false);
+      setHasBriaRmbg(false);
     }
   };
 
@@ -728,6 +733,10 @@ function AppContent() {
   }, [expandSettings, history]);
 
   const handleGenerate = async () => {
+    if (settings.preserveExactArt && !hasBriaRmbg) {
+      setError('Точное сохранение исходного арта пока не готово на сервере. Отключите этот режим или повторите позже.');
+      return;
+    }
     const ordered =
       createLayoutMode === 'scene'
         ? sceneRolesOrder(scenePlan)
@@ -1081,7 +1090,7 @@ function AppContent() {
           <p className="text-zinc-400 text-lg leading-relaxed mb-10">
             {window.aistudio
               ? "Для начала работы необходимо выбрать API ключ Gemini. Это бесплатно и безопасно."
-              : "Для работы приложения необходим Gemini API ключ. Добавьте переменную GEMINI_API_KEY в настройки окружения Vercel и пересоберите проект."}
+              : "Генератор временно недоступен. Проверьте серверную конфигурацию Cover."}
           </p>
 
           <div className="space-y-4">
