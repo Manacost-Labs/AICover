@@ -28,6 +28,15 @@ RULES:
 6. COLOR: Match environment ambient light.
 7. GROUNDING: Realistic shadows connected to feet.`;
 
+const CARD_COVER_QUALITY_CONTRACT =
+`CARD-COVER QUALITY CONTRACT:
+1. Thumbnail readability: one clear focal group, readable silhouettes at small size, no noisy micro-detail.
+2. Composition: strong foreground/midground/background depth; characters must not float unless intentionally airborne.
+3. Lighting hierarchy: one dominant key light, one restrained rim/accent light, coherent cast shadows.
+4. Hearthstone cover feel: high-contrast fantasy illustration, saturated but controlled color, dramatic readable shapes.
+5. Framing: keep important faces, weapons, and silhouettes away from hard crop edges unless the user explicitly asks.
+6. Finish: polished card art, not a sketch, not photorealistic, not UI, not text/logos/watermarks.`;
+
 export interface GenerationSettings {
   model: string;
   aspectRatio: "1:1" | "1:4" | "1:8" | "2:3" | "3:2" | "3:4" | "4:1" | "4:3" | "4:5" | "5:4" | "8:1" | "9:16" | "16:9" | "21:9";
@@ -132,6 +141,62 @@ function truncateUtf16(text: string, maxLen: number): string {
   return head.trimEnd() + "…";
 }
 
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function isRetryableGeminiError(error: unknown): boolean {
+  const text = errorText(error);
+  return (
+    /\b503\b/.test(text) ||
+    /UNAVAILABLE/i.test(text) ||
+    /Deadline expired/i.test(text) ||
+    /operation could complete/i.test(text)
+  );
+}
+
+export function formatGeminiError(error: unknown): string {
+  const text = errorText(error);
+  if (isRetryableGeminiError(error)) {
+    return "Gemini не успел завершить генерацию. Я уже повторил запрос автоматически, но сервис всё ещё отвечает таймаутом. Попробуйте ещё раз через минуту или выберите модель 2.5 Flash / размер 1K.";
+  }
+  if (/RESOURCE_EXHAUSTED|429|quota|rate limit/i.test(text)) {
+    return "Gemini временно ограничил запросы по квоте или частоте. Подождите немного и попробуйте снова.";
+  }
+  if (/API Key not found|API_KEY|key/i.test(text)) {
+    return "Не найден или не принят Gemini API ключ. Проверьте ключ в окружении и пересоберите приложение.";
+  }
+  return text || "Генерация не удалась. Пожалуйста, попробуйте снова.";
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function generateContentWithRetry(
+  ai: GoogleGenAI,
+  request: Parameters<GoogleGenAI["models"]["generateContent"]>[0],
+  attempts = 3
+): ReturnType<GoogleGenAI["models"]["generateContent"]> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await ai.models.generateContent(request);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGeminiError(error) || attempt === attempts) break;
+      await sleep(700 * attempt + Math.floor(Math.random() * 350));
+    }
+  }
+  throw lastError;
+}
+
 /**
  * Favorite / benchmark image URL → Gemini inlineData payload.
  * Supports data URLs and http(s) (e.g. Supabase public URLs after migration).
@@ -213,7 +278,7 @@ export async function analyzeReferenceCompositionVision(image: ImageSource): Pro
   }
   const ai = new GoogleGenAI({ apiKey });
   try {
-    const res = await ai.models.generateContent({
+    const res = await generateContentWithRetry(ai, {
       model: VISION_MODEL,
       contents: {
         parts: [
@@ -292,80 +357,13 @@ export async function analyzeFavoriteChoiceVision(
     });
   });
   try {
-    const res = await ai.models.generateContent({
+    const res = await generateContentWithRetry(ai, {
       model: VISION_MODEL,
       contents: { parts },
     });
     return (res.text || "").trim() || "{}";
   } catch (e) {
     console.error("analyzeFavoriteChoiceVision", e);
-    throw e;
-  }
-}
-
-
-const FAVORITE_VIDEO_CHOICE_VISION_PROMPT = `You are a vision analyst for AI-generated short VIDEO clips (Veo / image-to-video).
-
-The user added ONE video to favorites. It may be one of several variants from the same batch. Still frames are provided in order: first = CHOSEN (favorite), then REJECTED alternatives (if any). Each frame is an approximate first-frame snapshot of the clip.
-
-Task:
-- Infer plausible reasons the user might prefer the CHOSEN clip: motion subtlety, loop feel, stability (no zoom/pan if intended), artifact level, atmosphere, faithfulness to the original illustration.
-- Use cautious wording: "likely", "may", "tends to".
-- If there are NO alternatives, still summarize strengths of the chosen clip.
-
-Output ONLY valid JSON (no markdown, no code fences). Shape:
-{
-  "summary_ru": "2-4 sentences in Russian",
-  "likely_reasons_ru": ["short bullet in Russian", "..."],
-  "vs_others_ru": "1-3 sentences comparing chosen vs rejected; empty string if no alternatives"
-}`;
-
-/**
- * Explains likely reasons the user favored one video variant over batch alternatives (Gemini vision on first frames).
- */
-export async function analyzeFavoriteVideoChoiceVision(
-  chosen: ImageSource,
-  alternatives: ImageSource[],
-  options?: { userPromptHint?: string }
-): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
-  }
-  const ai = new GoogleGenAI({ apiKey });
-  const hint = options?.userPromptHint?.trim();
-  const parts: any[] = [
-    {
-      text:
-        FAVORITE_VIDEO_CHOICE_VISION_PROMPT +
-        (hint ? "\nOptional user prompt/theme hint (may be empty): " + hint : "") +
-        "\n\nOrder: frame 1 = CHOSEN favorite (video). Frames 2+ = rejected batch variants (same count as provided).",
-    },
-    { text: "CHOSEN (favorite video, first frame):" },
-    {
-      inlineData: {
-        data: chosen.data.split(",")[1] || chosen.data,
-        mimeType: chosen.mimeType,
-      },
-    },
-  ];
-  alternatives.forEach((alt, idx) => {
-    parts.push({ text: "Rejected variant " + (idx + 1) + " (first frame):" });
-    parts.push({
-      inlineData: {
-        data: alt.data.split(",")[1] || alt.data,
-        mimeType: alt.mimeType,
-      },
-    });
-  });
-  try {
-    const res = await ai.models.generateContent({
-      model: VISION_MODEL,
-      contents: { parts },
-    });
-    return (res.text || "").trim() || "{}";
-  } catch (e) {
-    console.error("analyzeFavoriteVideoChoiceVision", e);
     throw e;
   }
 }
@@ -396,7 +394,7 @@ Separate characters with a line "---". Max ~500 characters total.`,
     });
   });
   try {
-    const res = await ai.models.generateContent({
+    const res = await generateContentWithRetry(ai, {
       model: VISION_MODEL,
       contents: { parts },
     });
@@ -423,9 +421,9 @@ async function visionCheckFusionOutput(
   const parts: any[] = [
     {
       text: `Strict QC: SOURCE images (order) vs OUTPUT. One combined scene expected.
-Check: (1) identity vs each SOURCE (2) single environment (3) unified lighting.
+Check: (1) identity vs each SOURCE (2) single environment (3) unified lighting (4) card-cover readability: clear focal group, readable silhouettes, no noisy clutter.
 JSON only, no markdown: {"pass":true|false,"issues":["English",...]}
-pass=false if redrawn/unrecognizable vs SOURCE or obvious collage.`,
+pass=false if redrawn/unrecognizable vs SOURCE, obvious collage, or unreadable cluttered cover composition.`,
     },
   ];
   sources.forEach((src, idx) => {
@@ -445,7 +443,7 @@ pass=false if redrawn/unrecognizable vs SOURCE or obvious collage.`,
     },
   });
   try {
-    const res = await ai.models.generateContent({
+    const res = await generateContentWithRetry(ai, {
       model: VISION_MODEL,
       contents: { parts },
     });
@@ -530,7 +528,7 @@ ${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}` : ""}`;
     imageConfig.imageSize = settings.imageSize;
   }
 
-  const response = await ai.models.generateContent({
+  const response = await generateContentWithRetry(ai, {
     model,
     contents: { parts },
     config: { imageConfig },
@@ -585,8 +583,7 @@ export async function generateFusedCover(
             compositionDescription = storedNotes;
           })
         : reference
-          ? ai.models
-              .generateContent({
+          ? generateContentWithRetry(ai, {
                 model: VISION_MODEL,
                 contents: {
                   parts: [
@@ -721,9 +718,10 @@ export async function generateFusedCover(
     - Do NOT copy template scenery, palette, or character designs from the template.
     - Match scale and framing only.` : ""}`;
 
-    const finalPrompt = `${fullPrompt}
-    ${(settings.prompt && !baseImage) || (settings.prompt && useCustomEdit) ? `USER: ${settings.prompt}` : ""}
-    ${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}, redrawing, changing faces, mutation, extra limbs, collage, split-screen` : "AVOID: redrawing, changing faces, mutation, extra limbs, collage, split-screen"}`;
+	    const finalPrompt = `${fullPrompt}
+      ${CARD_COVER_QUALITY_CONTRACT}
+	    ${(settings.prompt && !baseImage) || (settings.prompt && useCustomEdit) ? `USER: ${settings.prompt}` : ""}
+	    ${settings.negativePrompt ? `AVOID: ${settings.negativePrompt}, redrawing, changing faces, mutation, extra limbs, collage, split-screen` : "AVOID: redrawing, changing faces, mutation, extra limbs, collage, split-screen"}`;
 
     const batchVariation =
       settings.batchSize > 1 && !baseImage
@@ -740,7 +738,7 @@ export async function generateFusedCover(
       imageConfig.imageSize = settings.imageSize;
     }
 
-    const generatePromise = ai.models.generateContent({
+    const generatePromise = generateContentWithRetry(ai, {
       model,
       contents: { parts },
       config: {
@@ -828,7 +826,7 @@ export async function upscaleImage(
     imageConfig.imageSize = targetSize;
   }
 
-  const response = await ai.models.generateContent({
+  const response = await generateContentWithRetry(ai, {
     model,
     contents: {
       parts: [
@@ -873,7 +871,7 @@ export async function expandImage(
   const ai = new GoogleGenAI({ apiKey });
   const normalized = await normalizeImageSource(image);
 
-  const response = await ai.models.generateContent({
+  const response = await generateContentWithRetry(ai, {
     model,
     contents: {
       parts: [

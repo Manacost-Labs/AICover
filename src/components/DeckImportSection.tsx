@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { OptimizedImage } from './OptimizedImage';
 import { ChevronDown, ChevronUp, Layers, Search, Loader2, X, Check } from 'lucide-react';
 import type { CardLibraryEntry } from '../services/supabaseService';
-import { findLibraryCardsInDeck } from '../services/hearthstoneService';
+import { findDeckFullArtCardsInDeck, findLibraryCardsInDeck } from '../services/hearthstoneService';
 
 interface DeckImportSectionProps {
   cardLibrary: CardLibraryEntry[];
@@ -31,17 +31,17 @@ export const DeckImportSection: React.FC<DeckImportSectionProps> = ({
 
   const handleSearch = async () => {
     if (!deckstring.trim()) return;
-    if (!cardLibrary.length) {
-      setError('Библиотека карт пуста. Добавьте карты во вкладке «Библиотека».');
-      return;
-    }
     setError(null);
     setIsSearching(true);
     setResults(null);
     try {
-      const found = await findLibraryCardsInDeck(deckstring.trim(), cardLibrary);
+      const [libraryFound, fullArtFound] = await Promise.all([
+        findLibraryCardsInDeck(deckstring.trim(), cardLibrary),
+        findDeckFullArtCardsInDeck(deckstring.trim()),
+      ]);
+      const found = [...fullArtFound, ...libraryFound];
       setResults(found);
-      if (found.length === 0) setError('Карты из библиотеки в этой колоде не найдены.');
+      if (found.length === 0) setError('Full art для карт этой колоды не найдены.');
     } catch (e: any) {
       setError(`Ошибка декодирования: ${e.message || 'неверный формат deckstring'}`);
     } finally {
@@ -115,9 +115,9 @@ export const DeckImportSection: React.FC<DeckImportSectionProps> = ({
                     {isSearching ? 'Ищем...' : 'Найти'}
                   </button>
                 </div>
-                {cardLibrary.length === 0 && (
-                  <p className="text-[10px] text-zinc-600">Сначала добавьте карты во вкладке «Библиотека»</p>
-                )}
+                <p className="text-[10px] text-zinc-600">
+                  Full art подтягиваются автоматически из базы. Ручная библиотека тоже учитывается, если в ней есть совпадения.
+                </p>
               </div>
 
               {/* Error */}
@@ -143,7 +143,7 @@ export const DeckImportSection: React.FC<DeckImportSectionProps> = ({
                   >
                     <div className="flex items-center justify-between">
                       <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                        Найдено {results.length} {results.length === 1 ? 'карта' : results.length < 5 ? 'карты' : 'карт'} из библиотеки
+                        Найдено {results.length} {results.length === 1 ? 'арт' : results.length < 5 ? 'арта' : 'артов'} из колоды
                       </p>
                       <p className="text-[10px] text-zinc-600">
                         Нажмите чтобы добавить в источники ({sources.length}/{maxSources})

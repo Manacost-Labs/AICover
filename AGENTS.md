@@ -39,8 +39,11 @@ src/
     ResultCard.tsx, UpscaleResultCard.tsx, OptimizedImage.tsx, DeckImportSection.tsx
   services/
     geminiService.ts   # Генерация обложки, vision-QA, апскейл, expand, анализ референса/избранного
+    thumbnailService.ts # Генерация art-only фонов для HS-обложек
+    hearthstoneAssetService.ts # Поиск игровых артов через db.kolodahs.ru
     supabaseService.ts # CRUD облака + fallback на IDB, URL → ImageSource
     hearthstoneService.ts
+  features/thumbnail/  # Типы, шаблоны, промпт и Canvas-рендер HS-обложки
 ```
 
 Корень репозитория: `vite.config.ts`, `vercel.json`, `metadata.json` (имя приложения), `index.html`, `README.md`.
@@ -108,6 +111,7 @@ Supabase: переменные читаются в `supabaseService.ts` (URL, an
 | `expand` | `ExpandTab` | Outpaint / расширение |
 | `library` | `LibraryTab` | Библиотека карт |
 | `references` | `ReferencesTab` | Библиотека референсов |
+| `thumbnail` | `ThumbnailTab` | HS-обложки: игровые ассеты, Gemini-арт, AI-типографика с OCR-проверкой, Canvas fallback и PNG |
 
 Шапка: бренд **Cover**, переключение вкладок, при необходимости AI Studio API key (`window.aistudio`).
 

@@ -144,11 +144,16 @@ export const CreateTab: React.FC<CreateTabProps> = ({
   onAddCardSource,
   onRemoveCardSource,
 }) => {
-  const sceneRoles = sceneRolesOrder(scenePlan);
-  const sceneFilled = sceneRoles.filter(r => sources.some((s: { role?: SceneRole }) => s.role === r)).length;
-  const maxCover = 4;
-  const maxScene = scenePlan;
-  const [sceneDragOverRole, setSceneDragOverRole] = React.useState<SceneRole | null>(null);
+	const sceneRoles = sceneRolesOrder(scenePlan);
+	const sceneFilled = sceneRoles.filter(r => sources.some((s: { role?: SceneRole }) => s.role === r)).length;
+	const maxCover = 4;
+	const maxScene = scenePlan;
+	const [sceneDragOverRole, setSceneDragOverRole] = React.useState<SceneRole | null>(null);
+  const generationSteps = [
+    { id: 'preparing', label: 'Анализ исходников', active: generationProgress?.phase === 'preparing', done: Boolean(generationProgress) && generationProgress.phase !== 'preparing' },
+    { id: 'generating', label: 'Генерация вариантов', active: generationProgress?.phase === 'generating', done: Boolean(generationProgress) && generationProgress.phase === 'strict' },
+    { id: 'strict', label: 'Проверка качества', active: generationProgress?.phase === 'strict', done: false },
+  ];
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
@@ -600,85 +605,88 @@ export const CreateTab: React.FC<CreateTabProps> = ({
             scenePlan={scenePlan}
           />
 
-          <AnimatePresence mode="wait">
-            {isGenerating ? (
-              <motion.div
-                key="loading"
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.05 }}
-                className="bg-zinc-900/50 rounded-[3rem] border border-white/5 min-h-[600px] flex items-center justify-center shadow-sm"
-              >
-                <div className="flex flex-col items-center gap-8 text-center p-10">
-                  <div className="relative">
-                    <motion.div
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                      className="w-32 h-32 border-4 border-indigo-500/10 border-t-indigo-500 rounded-full"
-                    />
-                    <Sparkles className="w-10 h-10 text-indigo-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
-                  </div>
-                  <div className="space-y-3 w-full max-w-md mx-auto">
-                    <h3 className="text-3xl font-black tracking-tighter text-white">Создаем шедевр...</h3>
-                    {generationProgress && (
-                      <p className="text-indigo-400/90 text-[11px] font-black uppercase tracking-widest">
-                        {generationProgress.phase === 'preparing' && 'Подготовка — анализ исходников'}
-                        {generationProgress.phase === 'generating' && 'Генерация изображений'}
-                        {generationProgress.phase === 'strict' && 'Строгий режим — проверка качества'}
-                      </p>
-                    )}
-                    {generationProgress && (
-                      <div className="relative w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
-                        {generationProgress.phase === 'preparing' || generationProgress.phase === 'strict' ? (
-                          <motion.div
-                            className="absolute top-0 bottom-0 w-[40%] rounded-full bg-gradient-to-r from-indigo-600 to-violet-500"
-                            initial={{ left: '-40%' }}
-                            animate={{ left: ['-40%', '100%'] }}
-                            transition={{ duration: 1.15, repeat: Infinity, ease: 'linear' }}
-                          />
-                        ) : (
-                          <motion.div
-                            className="absolute top-0 left-0 bottom-0 rounded-full bg-gradient-to-r from-indigo-600 to-violet-500"
-                            initial={{ width: '0%' }}
-                            animate={{
-                              width: `${Math.min(
-                                100,
-                                (generationProgress.done / Math.max(1, generationProgress.total)) * 100
-                              )}%`,
-                            }}
-                            transition={{ ease: 'easeOut', duration: 0.35 }}
-                          />
-                        )}
+	          <AnimatePresence mode="wait">
+	            {isGenerating ? (
+	              <motion.div
+	                key="loading"
+	                initial={{ opacity: 0, scale: 0.95 }}
+	                animate={{ opacity: 1, scale: 1 }}
+	                exit={{ opacity: 0, scale: 1.05 }}
+	                className="min-h-[420px] rounded-2xl border border-white/10 bg-zinc-950/70 shadow-sm"
+	              >
+	                <div className="grid min-h-[420px] grid-cols-1 gap-0 md:grid-cols-[1fr_220px]">
+                    <div className="flex flex-col justify-between p-6 sm:p-8">
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-black uppercase tracking-[0.24em] text-indigo-300">Generation queue</p>
+                        <h3 className="text-2xl font-black tracking-tight text-white">Сборка обложки</h3>
                       </div>
-                    )}
-                    {generationProgress && generationProgress.phase === 'generating' && generationProgress.total > 1 ? (
-                      <p className="text-zinc-400 text-sm font-bold">
-                        {generationProgress.done} / {generationProgress.total} вариантов готово
-                      </p>
-                    ) : generationProgress && generationProgress.phase === 'generating' && generationProgress.total === 1 ? (
-                      <p className="text-zinc-500 text-sm">Почти готово…</p>
-                    ) : generationProgress && generationProgress.phase === 'preparing' ? (
-                      <p className="text-zinc-500 text-sm max-w-sm mx-auto">
-                        Анализируем цвета, объекты и композицию для вашей уникальной обложки.
-                      </p>
-                    ) : generationProgress && generationProgress.phase === 'strict' ? (
-                      <p className="text-zinc-500 text-sm max-w-sm mx-auto">
-                        Автоматическая проверка и при необходимости доработка кадра.
-                      </p>
-                    ) : (
-                      <p className="text-zinc-500 text-lg max-w-sm mx-auto">
-                        Анализируем цвета, объекты и композицию для вашей уникальной обложки.
-                      </p>
-                    )}
+
+                      <div className="my-8 space-y-3">
+                        {generationSteps.map((step, index) => (
+                          <div
+                            key={step.id}
+                            className={`flex items-center gap-4 rounded-xl border px-4 py-3 transition-all ${
+                              step.active
+                                ? 'border-indigo-300/60 bg-indigo-500/15 text-white'
+                                : step.done
+                                  ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200'
+                                  : 'border-white/5 bg-white/[0.025] text-zinc-500'
+                            }`}
+                          >
+                            <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-black ${
+                              step.active ? 'bg-white text-zinc-950' : step.done ? 'bg-emerald-400 text-zinc-950' : 'bg-white/5 text-zinc-500'
+                            }`}>
+                              {index + 1}
+                            </span>
+                            <span className="min-w-0 flex-1 text-sm font-black">{step.label}</span>
+                            {step.active && <Loader2 className="h-4 w-4 animate-spin text-indigo-200" />}
+                          </div>
+                        ))}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={onCancelGeneration}
+                        className="w-fit rounded-xl border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm font-black text-zinc-300 transition-all hover:bg-white/10 hover:text-white"
+                      >
+                        Отмена
+                      </button>
+                    </div>
+
+                    <div className="border-t border-white/10 bg-black/20 p-6 md:border-l md:border-t-0">
+                      <div className="flex h-full flex-col justify-between gap-6">
+                        <div className="space-y-2">
+                          <p className="text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">Варианты</p>
+                          <div className="flex items-end gap-2">
+                            <span className="text-5xl font-black text-white">{generationProgress?.done ?? 0}</span>
+                            <span className="pb-2 text-sm font-black text-zinc-500">/ {generationProgress?.total ?? settings.batchSize}</span>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-4 gap-2">
+                          {Array.from({ length: settings.batchSize }).map((_, index) => (
+                            <div
+                              key={index}
+                              className={`aspect-square rounded-lg border ${
+                                generationProgress && index < generationProgress.done
+                                  ? 'border-emerald-300 bg-emerald-400'
+                                  : generationProgress?.phase === 'generating' && index === generationProgress.done
+                                    ? 'border-indigo-200 bg-indigo-400/70'
+                                    : 'border-white/10 bg-white/[0.04]'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+                          <motion.div
+                            className="h-full rounded-full bg-white"
+                            animate={{ width: `${generationProgress ? Math.max(8, Math.round((generationProgress.done / Math.max(1, generationProgress.total)) * 100)) : 8}%` }}
+                            transition={{ duration: 0.3 }}
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <button
-                    onClick={onCancelGeneration}
-                    className="px-6 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-sm font-bold transition-all border border-white/10"
-                  >
-                    Отмена
-                  </button>
-                </div>
-              </motion.div>
+	              </motion.div>
             ) : results.length > 0 ? (
               <motion.div
                 key="results"

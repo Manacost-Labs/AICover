@@ -21,20 +21,3 @@ export const MODELS_SUPPORTING_IMAGE_SIZE = new Set([
 export const MODELS_NO_512PX = new Set([
   "gemini-3-pro-image-preview",
 ]);
-
-export const VEO_MODELS = [
-  { id: "veo-3.1-generate-preview", name: "Veo 3.1", desc: "Высокое качество" },
-  { id: "veo-3.1-fast-generate-preview", name: "Veo 3.1 Fast", desc: "Быстрее" },
-] as const;
-
-export const VEO_ASPECT_RATIOS = ["16:9", "9:16"] as const;
-
-export const VEO_RESOLUTIONS = [
-  { id: "720p", label: "720p" },
-  { id: "1080p", label: "1080p" },
-] as const;
-
-/** Параллельных запросов Veo (каждый — отдельное видео). */
-export const VEO_BATCH_SIZES = [1, 2, 3, 4] as const;
-
-export const VEO_DEFAULT_PROMPT = `A detailed fantasy illustration comes to life with minimal motion. Magical particles float slowly upward, fire flickers softly, water surface shimmers with subtle ripples. The composition stays locked — no zoom, no pan. Seamless loop, painterly style preserved.`;

@@ -1,92 +1,30 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { get, set, del } from 'idb-keyval';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+export const supabase = null;
+export const isSupabaseConfigured = true;
+const CLIENT_MEDIA_RESET_VERSION = '2026-06-30-server-authoritative-v2';
+const CLIENT_MEDIA_RESET_KEY = 'cover_client_media_reset_version';
+const CLIENT_MEDIA_KEYS = [
+  'fusion_history',
+  'fusion_liked',
+  'fusion_favorite_choice_notes',
+  'fusion_reference_library',
+  'fusion_video_history',
+  'fusion_video_liked',
+  'fusion_video_favorite_choice_notes',
+];
 
-/** Strip wrapping quotes often pasted by mistake from dashboards / docs. */
-function stripEnvQuotes(raw: string): string {
-  let s = raw.trim();
-  if (s.length >= 2 && ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))) {
-    s = s.slice(1, -1).trim();
-  }
-  return s;
-}
-
-/** JWT must be one line; line breaks inside the key break "Compact JWS" parsing. */
-function normalizeAnonKey(raw: string): string {
-  return stripEnvQuotes(raw).replace(/\s+/g, '');
-}
-
-/** Legacy anon key is a JWT (three dot-separated segments). New keys use `sb_publishable_...`. */
-function isValidSupabaseClientKey(key: string): boolean {
-  if (key.startsWith('sb_publishable_')) return true;
-  const parts = key.split('.');
-  return parts.length === 3 && parts.every(p => p.length > 0);
-}
-
-/** Never throw at module load — invalid env would otherwise blank-screen the whole app. */
-function createSupabaseSafe(): SupabaseClient | null {
-  const urlRaw = supabaseUrl?.trim();
-  const keyRaw = supabaseKey?.trim();
-  if (!urlRaw || !keyRaw || urlRaw === 'undefined' || keyRaw === 'undefined') return null;
-
-  const url = stripEnvQuotes(urlRaw);
-  const key = normalizeAnonKey(keyRaw);
-  if (!isValidSupabaseClientKey(key)) {
-    console.error(
-      'VITE_SUPABASE_ANON_KEY: use Publishable key (sb_publishable_…) or legacy anon JWT from Supabase → Project Settings → API.'
-    );
-    return null;
-  }
-  try {
-    new URL(url);
-    return createClient(url, key);
-  } catch (e) {
-    console.error('Supabase init failed (check VITE_SUPABASE_URL / ANON_KEY):', e);
-    return null;
-  }
-}
-
-export const supabase = createSupabaseSafe();
-
-export const isSupabaseConfigured = !!supabase;
-
-/** User-facing text for PostgREST / auth errors (e.g. Invalid Compact JWS). */
 export function formatSupabaseClientError(err: unknown): string {
-  let raw: string;
-  if (err instanceof Error) {
-    raw = err.message;
-  } else if (err && typeof err === 'object') {
-    const o = err as Record<string, unknown>;
-    if (typeof o.message === 'string' && o.message.length > 0) {
-      raw = o.message;
-      if (typeof o.details === 'string' && o.details.trim()) raw += ` — ${o.details.trim()}`;
-      else if (typeof o.hint === 'string' && o.hint.trim()) raw += ` — ${o.hint.trim()}`;
-      if (typeof o.code === 'string' && o.code) raw += ` [${o.code}]`;
-    } else {
-      try {
-        raw = JSON.stringify(err);
-      } catch {
-        raw = 'Неизвестная ошибка';
-      }
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object') {
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return 'Неизвестная ошибка';
     }
-  } else {
-    raw = String(err ?? '');
   }
-  if (/invalid compact jws|jwt|jws/i.test(raw)) {
-    return 'Ключ anon public повреждён или обрезан: откройте Supabase → Project Settings → API, скопируйте ключ полностью (одна строка, начинается с eyJ…), в Vercel вставьте без кавычек и переносов строк, затем Redeploy.';
-  }
-  if (/row-level security|rls/i.test(raw)) {
-    return 'Доступ к таблице заблокирован RLS: в Supabase → SQL Editor выполните скрипт supabase/rls-anon-policies.sql из репозитория (политики для роли anon на card_library, reference_library, history, favorites и bucket images).';
-  }
-  if (/storage|bucket|object|upload|policy/i.test(raw) && /violat|denied|forbidden|403|unauthor/i.test(raw)) {
-    return 'Ошибка Storage: проверьте bucket images и политики в supabase/rls-anon-policies.sql (раздел Storage).';
-  }
-  return raw;
+  return String(err ?? 'Неизвестная ошибка');
 }
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ReferenceLibraryEntry {
   id: string;
@@ -95,8 +33,8 @@ export interface ReferenceLibraryEntry {
   storagePath: string;
   mimeType: string;
   addedAt: number;
-  /** JSON or text from Gemini vision analysis */
   visionAnalysis: string | null;
+  storageAvailable?: boolean;
 }
 
 export interface CardLibraryEntry {
@@ -107,9 +45,53 @@ export interface CardLibraryEntry {
   storagePath: string;
   mimeType: string;
   addedAt: number;
+  storageAvailable?: boolean;
 }
 
-// ─── Storage helpers ──────────────────────────────────────────────────────────
+function mergeUnique(primary: string[], secondary: string[]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const value of [...primary, ...secondary]) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    merged.push(value);
+  }
+  return merged;
+}
+
+function localImageFallback(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => (
+    typeof item === 'string' && (item.startsWith('data:image/') || item.startsWith('blob:'))
+  ));
+}
+
+async function clearClientMediaCacheOnce(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  if (window.localStorage.getItem(CLIENT_MEDIA_RESET_KEY) === CLIENT_MEDIA_RESET_VERSION) return;
+  await Promise.all(CLIENT_MEDIA_KEYS.map((key) => del(key).catch(() => {})));
+  for (const key of CLIENT_MEDIA_KEYS) window.localStorage.removeItem(key);
+  window.localStorage.setItem(CLIENT_MEDIA_RESET_KEY, CLIENT_MEDIA_RESET_VERSION);
+}
+
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    headers: {
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...init?.headers,
+    },
+  });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const data = await response.json();
+      if (data?.error) message = data.error;
+    } catch {}
+    throw new Error(message);
+  }
+  return response.json() as Promise<T>;
+}
 
 function base64ToBytes(base64: string, mimeType: string): Blob {
   const raw = base64.split(',')[1] || base64;
@@ -117,26 +99,6 @@ function base64ToBytes(base64: string, mimeType: string): Blob {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return new Blob([bytes], { type: mimeType });
-}
-
-function getPublicUrl(path: string): string {
-  if (!supabase) return '';
-  return supabase.storage.from('images').getPublicUrl(path).data.publicUrl;
-}
-
-function extractPathFromUrl(url: string): string | null {
-  const match = url.match(/\/storage\/v1\/object\/public\/images\/(.+?)(\?.*)?$/);
-  return match ? match[1] : null;
-}
-
-async function uploadBlob(blob: Blob, path: string): Promise<string> {
-  if (!supabase) throw new Error('Supabase not configured');
-  const { error } = await supabase.storage.from('images').upload(path, blob, {
-    contentType: blob.type,
-    upsert: true,
-  });
-  if (error) throw error;
-  return getPublicUrl(path);
 }
 
 async function urlToBase64(url: string): Promise<{ base64: string; mimeType: string }> {
@@ -150,28 +112,46 @@ async function urlToBase64(url: string): Promise<{ base64: string; mimeType: str
   });
 }
 
-function newId(): string {
-  return Math.random().toString(36).substring(2, 12);
+function pathFromLocalUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    if (!parsed.pathname.startsWith('/uploads/')) return null;
+    return decodeURIComponent(parsed.pathname.slice('/uploads/'.length));
+  } catch {
+    return null;
+  }
 }
 
-// ─── Card Library ─────────────────────────────────────────────────────────────
+async function normalizeMediaInput(input: string, fallbackMimeType: string): Promise<{ dataUrl: string; mimeType: string }> {
+  if (input.startsWith('data:')) {
+    const match = input.match(/^data:([^;]+);base64,/);
+    return { dataUrl: input, mimeType: match?.[1] || fallbackMimeType };
+  }
+  if (input.startsWith('http://') || input.startsWith('https://') || input.startsWith('/')) {
+    const converted = await urlToBase64(input);
+    return { dataUrl: converted.base64, mimeType: converted.mimeType || fallbackMimeType };
+  }
+  throw new Error('Expected data URL or media URL');
+}
+
+export async function fetchUrlAsImageSource(url: string): Promise<{ data: string; mimeType: string }> {
+  const { base64, mimeType } = await urlToBase64(url);
+  return { data: base64, mimeType };
+}
+
+export async function imageUrlToImageSource(url: string): Promise<{ data: string; mimeType: string }> {
+  if (url.startsWith('data:')) {
+    const match = url.match(/^data:(image\/[^;]+);base64,/);
+    return { data: url, mimeType: match ? match[1] : 'image/png' };
+  }
+  return fetchUrlAsImageSource(url);
+}
 
 export async function loadCardLibrary(): Promise<CardLibraryEntry[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('card_library')
-    .select('*')
-    .order('added_at', { ascending: false });
-  if (error) { console.error('loadCardLibrary', error); return []; }
-  return (data || []).map(row => ({
-    id: row.id,
-    name: row.name,
-    cardId: row.card_id,
-    storagePath: row.storage_path,
-    storageUrl: getPublicUrl(row.storage_path),
-    mimeType: row.mime_type,
-    addedAt: row.added_at,
-  }));
+  return api<CardLibraryEntry[]>('/api/card-library').catch((error) => {
+    console.error('loadCardLibrary', error);
+    return [];
+  });
 }
 
 export async function saveCardToLibrary(
@@ -180,50 +160,21 @@ export async function saveCardToLibrary(
   imageData: string,
   mimeType: string
 ): Promise<CardLibraryEntry> {
-  if (!supabase) throw new Error('Supabase not configured');
-  const id = newId();
-  const ext = mimeType.split('/')[1]?.split('+')[0] || 'png';
-  const storagePath = `cards/${id}.${ext}`;
-  const blob = base64ToBytes(imageData, mimeType);
-  const storageUrl = await uploadBlob(blob, storagePath);
-  const { error } = await supabase.from('card_library').insert({
-    id,
-    name,
-    card_id: cardId,
-    storage_path: storagePath,
-    mime_type: mimeType,
-    added_at: Date.now(),
+  return api<CardLibraryEntry>('/api/card-library', {
+    method: 'POST',
+    body: JSON.stringify({ name, cardId, imageData, mimeType }),
   });
-  if (error) throw error;
-  return { id, name, cardId, storageUrl, storagePath, mimeType, addedAt: Date.now() };
 }
 
-export async function deleteCardFromLibrary(id: string, storagePath: string): Promise<void> {
-  if (!supabase) return;
-  await supabase.storage.from('images').remove([storagePath]);
-  await supabase.from('card_library').delete().eq('id', id);
+export async function deleteCardFromLibrary(id: string, _storagePath?: string): Promise<void> {
+  await api('/api/card-library/' + encodeURIComponent(id), { method: 'DELETE' });
 }
-// ─── Reference library ───────────────────────────────────────────────────────
 
 export async function loadReferenceLibrary(): Promise<ReferenceLibraryEntry[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('reference_library')
-    .select('*')
-    .order('added_at', { ascending: false });
-  if (error) {
+  return api<ReferenceLibraryEntry[]>('/api/reference-library').catch((error) => {
     console.error('loadReferenceLibrary', error);
     return [];
-  }
-  return (data || []).map(row => ({
-    id: row.id,
-    name: row.name,
-    storagePath: row.storage_path,
-    storageUrl: getPublicUrl(row.storage_path),
-    mimeType: row.mime_type,
-    addedAt: row.added_at,
-    visionAnalysis: row.vision_analysis ?? null,
-  }));
+  });
 }
 
 export async function saveReferenceToLibrary(
@@ -231,397 +182,96 @@ export async function saveReferenceToLibrary(
   imageData: string,
   mimeType: string
 ): Promise<ReferenceLibraryEntry> {
-  if (!supabase) throw new Error('Supabase not configured');
-  const id = newId();
-  const ext = mimeType.split('/')[1]?.split('+')[0] || 'png';
-  const storagePath = `references/${id}.${ext}`;
-  const blob = base64ToBytes(imageData, mimeType);
-  const storageUrl = await uploadBlob(blob, storagePath);
-  const { error } = await supabase.from('reference_library').insert({
-    id,
-    name,
-    storage_path: storagePath,
-    mime_type: mimeType,
-    added_at: Date.now(),
-    vision_analysis: null,
+  return api<ReferenceLibraryEntry>('/api/reference-library', {
+    method: 'POST',
+    body: JSON.stringify({ name, imageData, mimeType }),
   });
-  if (error) throw error;
-  return { id, name, storageUrl, storagePath, mimeType, addedAt: Date.now(), visionAnalysis: null };
 }
 
 export async function updateReferenceVisionAnalysis(id: string, visionAnalysis: string): Promise<void> {
-  if (!supabase) throw new Error('Supabase not configured');
-  const { error } = await supabase.from('reference_library').update({ vision_analysis: visionAnalysis }).eq('id', id);
-  if (error) throw error;
+  await api('/api/reference-library/' + encodeURIComponent(id) + '/vision-analysis', {
+    method: 'PATCH',
+    body: JSON.stringify({ visionAnalysis }),
+  });
 }
 
-/** Fetch remote image URL as data URL + mime (for re-analysis). */
-export async function fetchUrlAsImageSource(url: string): Promise<{ data: string; mimeType: string }> {
-  const { base64, mimeType } = await urlToBase64(url);
-  return { data: base64, mimeType };
+export async function deleteReferenceFromLibrary(id: string, _storagePath?: string): Promise<void> {
+  await api('/api/reference-library/' + encodeURIComponent(id), { method: 'DELETE' });
 }
-
-/** Normalize any app image URL to ImageSource for Gemini vision (data URL or http). */
-export async function imageUrlToImageSource(url: string): Promise<{ data: string; mimeType: string }> {
-  if (url.startsWith('data:')) {
-    const m = url.match(/^data:(image\/[^;]+);base64,/);
-    return { data: url, mimeType: m ? m[1] : 'image/png' };
-  }
-  return fetchUrlAsImageSource(url);
-}
-
-export async function deleteReferenceFromLibrary(id: string, storagePath: string): Promise<void> {
-  if (!supabase) return;
-  await supabase.storage.from('images').remove([storagePath]);
-  await supabase.from('reference_library').delete().eq('id', id);
-}
-
-
-// ─── History ─────────────────────────────────────────────────────────────────
 
 export async function loadHistory(): Promise<string[]> {
-  if (!supabase) {
-    const data = await get('fusion_history');
-    return data || [];
+  try {
+    return (await api<string[]>('/api/history')).slice(0, 50);
+  } catch (error) {
+    console.error('loadHistory', error);
+    return localImageFallback(await get('fusion_history').catch(() => undefined)).slice(0, 50);
   }
-  const { data, error } = await supabase
-    .from('history')
-    .select('storage_path')
-    .order('created_at', { ascending: false })
-    .limit(50);
-  if (error) { console.error('loadHistory', error); return []; }
-  return (data || []).map(row => getPublicUrl(row.storage_path));
 }
 
 export async function saveToHistory(imageInput: string, mimeType = 'image/png'): Promise<void> {
-  let dataUrl = imageInput;
-  let mt = mimeType;
+  const { dataUrl, mimeType: mt } = await normalizeMediaInput(imageInput, mimeType);
   try {
-    if (imageInput.startsWith('http://') || imageInput.startsWith('https://')) {
-      const conv = await urlToBase64(imageInput);
-      dataUrl = conv.base64;
-      mt = conv.mimeType || mimeType;
-    } else if (!imageInput.startsWith('data:')) {
-      console.warn('saveToHistory: expected data URL or http(s) URL, skipping');
-      return;
-    }
-  } catch (e) {
-    console.error('saveToHistory: could not resolve image', e);
-    return;
-  }
-
-  try {
-    const existing: string[] = (await get('fusion_history')) || [];
-    const updated = [dataUrl, ...existing].slice(0, 50);
-    await set('fusion_history', updated);
-  } catch {}
-
-  if (!supabase) return;
-  try {
-    const id = newId();
-    const ext = mt.split('/')[1]?.split('+')[0] || 'png';
-    const storagePath = `history/${id}.${ext}`;
-    const blob = base64ToBytes(dataUrl, mt);
-    await uploadBlob(blob, storagePath);
-    await supabase.from('history').insert({ id, storage_path: storagePath, created_at: Date.now() });
-  } catch (e) {
-    console.error('saveToHistory Supabase', e);
+    await api('/api/history', {
+      method: 'POST',
+      body: JSON.stringify({ dataUrl, mimeType: mt }),
+    });
+  } catch (error) {
+    console.error('saveToHistory', error);
+    const existing: string[] = (await get('fusion_history').catch(() => undefined)) || [];
+    await set('fusion_history', mergeUnique([dataUrl], existing).slice(0, 50)).catch(() => {});
   }
 }
 
 export async function clearHistory(): Promise<void> {
-  try { await del('fusion_history'); } catch {}
-  if (!supabase) return;
-  try {
-    const { data } = await supabase.from('history').select('storage_path');
-    if (data?.length) await supabase.storage.from('images').remove(data.map(r => r.storage_path));
-    await supabase.from('history').delete().neq('id', '');
-  } catch (e) {
-    console.error('clearHistory Supabase', e);
-  }
+  await del('fusion_history').catch(() => {});
+  await api('/api/history', { method: 'DELETE' }).catch((error) => console.error('clearHistory', error));
 }
-
-// ─── Favorites ────────────────────────────────────────────────────────────────
 
 export async function loadFavorites(): Promise<string[]> {
-  if (!supabase) {
-    const data = await get('fusion_liked');
-    return data || [];
+  try {
+    return await api<string[]>('/api/favorites');
+  } catch (error) {
+    console.error('loadFavorites', error);
+    return localImageFallback(await get('fusion_liked').catch(() => undefined));
   }
-  const { data, error } = await supabase
-    .from('favorites')
-    .select('storage_path')
-    .order('created_at', { ascending: false });
-  if (error) { console.error('loadFavorites', error); return []; }
-  return (data || []).map(row => getPublicUrl(row.storage_path));
 }
 
-/** Returns row id for follow-up updates (e.g. choice_analysis). */
 export async function addToFavorites(url: string): Promise<{ id: string } | null> {
-  if (!supabase) return null;
   try {
-    const id = newId();
-    let storagePath: string;
-    let mimeType = 'image/png';
-
-    if (url.startsWith('data:')) {
-      // base64 data URL
-      const m = url.match(/^data:(image\/[^;]+);base64,/);
-      if (m) mimeType = m[1];
-      const ext = mimeType.split('/')[1]?.split('+')[0] || 'png';
-      storagePath = `favorites/${id}.${ext}`;
-      const blob = base64ToBytes(url, mimeType);
-      await uploadBlob(blob, storagePath);
-    } else {
-      // Already a URL (e.g., Supabase history URL) — re-upload to favorites
-      const existing = extractPathFromUrl(url);
-      if (existing) {
-        // Copy within Supabase storage by downloading and re-uploading
-        const { base64, mimeType: mt } = await urlToBase64(url);
-        mimeType = mt;
-        const ext = mimeType.split('/')[1]?.split('+')[0] || 'png';
-        storagePath = `favorites/${id}.${ext}`;
-        const blob = base64ToBytes(base64, mimeType);
-        await uploadBlob(blob, storagePath);
-      } else {
-        const { base64, mimeType: mt } = await urlToBase64(url);
-        mimeType = mt;
-        const ext = mimeType.split('/')[1]?.split('+')[0] || 'png';
-        storagePath = `favorites/${id}.${ext}`;
-        const blob = base64ToBytes(base64, mimeType);
-        await uploadBlob(blob, storagePath);
-      }
-    }
-    await supabase.from('favorites').insert({ id, storage_path: storagePath, created_at: Date.now() });
-    return { id };
-  } catch (e) {
-    console.error('addToFavorites Supabase', e);
+    const { dataUrl, mimeType } = await normalizeMediaInput(url, 'image/png');
+    return await api<{ id: string }>('/api/favorites', {
+      method: 'POST',
+      body: JSON.stringify({ dataUrl, mimeType }),
+    });
+  } catch (error) {
+    console.error('addToFavorites', error);
+    const existing: string[] = (await get('fusion_liked').catch(() => undefined)) || [];
+    await set('fusion_liked', mergeUnique([url], existing)).catch(() => {});
     return null;
   }
 }
 
 export async function updateFavoriteChoiceAnalysis(id: string, choiceAnalysis: string): Promise<void> {
-  if (!supabase) return;
-  const { error } = await supabase.from('favorites').update({ choice_analysis: choiceAnalysis }).eq('id', id);
-  if (error) console.error('updateFavoriteChoiceAnalysis', error);
+  await api('/api/favorites/' + encodeURIComponent(id) + '/choice-analysis', {
+    method: 'PATCH',
+    body: JSON.stringify({ choiceAnalysis }),
+  }).catch((error) => console.error('updateFavoriteChoiceAnalysis', error));
 }
 
-/** Map public image URL → stored AI note (for merging into UI state). */
 export async function loadFavoriteChoiceNotesMap(): Promise<Record<string, string>> {
-  if (!supabase) return {};
-  const { data, error } = await supabase
-    .from('favorites')
-    .select('storage_path, choice_analysis')
-    .not('choice_analysis', 'is', null);
-  if (error || !data?.length) return {};
-  const out: Record<string, string> = {};
-  for (const row of data) {
-    if (row.choice_analysis && row.storage_path) {
-      out[getPublicUrl(row.storage_path)] = row.choice_analysis as string;
-    }
-  }
-  return out;
+  return api<Record<string, string>>('/api/favorites/choice-notes').catch(() => ({}));
 }
 
 export async function removeFromFavorites(url: string): Promise<void> {
-  if (!supabase) return;
-  try {
-    // Find by matching public URL pattern or direct path
-    const path = extractPathFromUrl(url);
-    if (path) {
-      await supabase.storage.from('images').remove([path]);
-      await supabase.from('favorites').delete().eq('storage_path', path);
-    } else {
-      // Fallback: delete all favorites with matching URL prefix won't work well
-      console.warn('removeFromFavorites: could not extract path from', url.slice(0, 50));
-    }
-  } catch (e) {
-    console.error('removeFromFavorites Supabase', e);
-  }
+  const existing: string[] = (await get('fusion_liked').catch(() => undefined)) || [];
+  await set('fusion_liked', existing.filter((item) => item !== url)).catch(() => {});
+  const path = pathFromLocalUrl(url);
+  if (!path) return;
+  await api('/api/favorites?path=' + encodeURIComponent(path), { method: 'DELETE' }).catch((error) =>
+    console.error('removeFromFavorites', error)
+  );
 }
-
-
-
-// ─── Video history / favorites (Veo) ───────────────────────────────────────────
-
-export async function loadVideoHistory(): Promise<string[]> {
-  if (!supabase) {
-    const data = await get('fusion_video_history');
-    return data || [];
-  }
-  const { data, error } = await supabase
-    .from('video_history')
-    .select('storage_path')
-    .order('created_at', { ascending: false })
-    .limit(50);
-  if (error) { console.error('loadVideoHistory', error); return []; }
-  return (data || []).map(row => getPublicUrl(row.storage_path));
-}
-
-export async function saveVideoToHistory(videoInput: string, mimeType = 'video/mp4'): Promise<void> {
-  let dataUrl = videoInput;
-  let mt = mimeType;
-  try {
-    if (videoInput.startsWith('http://') || videoInput.startsWith('https://')) {
-      const conv = await urlToBase64(videoInput);
-      dataUrl = conv.base64;
-      mt = conv.mimeType || mimeType;
-    } else if (!videoInput.startsWith('data:')) {
-      console.warn('saveVideoToHistory: expected data URL or http(s) URL, skipping');
-      return;
-    }
-  } catch (e) {
-    console.error('saveVideoToHistory: could not resolve video', e);
-    return;
-  }
-
-  try {
-    const existing: string[] = (await get('fusion_video_history')) || [];
-    const updated = [dataUrl, ...existing].slice(0, 50);
-    await set('fusion_video_history', updated);
-  } catch {}
-
-  if (!supabase) return;
-  try {
-    const id = newId();
-    const ext = mt.split('/')[1]?.split('+')[0] || 'mp4';
-    const storagePath = `video_history/${id}.${ext}`;
-    const blob = base64ToBytes(dataUrl, mt);
-    await uploadBlob(blob, storagePath);
-    await supabase.from('video_history').insert({ id, storage_path: storagePath, created_at: Date.now() });
-  } catch (e) {
-    console.error('saveVideoToHistory Supabase', e);
-  }
-}
-
-export async function clearVideoHistory(): Promise<void> {
-  try { await del('fusion_video_history'); } catch {}
-  if (!supabase) return;
-  try {
-    const { data } = await supabase.from('video_history').select('storage_path');
-    if (data?.length) await supabase.storage.from('images').remove(data.map(r => r.storage_path));
-    await supabase.from('video_history').delete().neq('id', '');
-  } catch (e) {
-    console.error('clearVideoHistory Supabase', e);
-  }
-}
-
-export async function loadVideoFavorites(): Promise<string[]> {
-  if (!supabase) {
-    const data = await get('fusion_video_liked');
-    return data || [];
-  }
-  const { data, error } = await supabase
-    .from('video_favorites')
-    .select('storage_path')
-    .order('created_at', { ascending: false });
-  if (error) { console.error('loadVideoFavorites', error); return []; }
-  return (data || []).map(row => getPublicUrl(row.storage_path));
-}
-
-export async function addVideoToFavorites(url: string): Promise<{ id: string } | null> {
-  if (!supabase) return null;
-  try {
-    const id = newId();
-    let storagePath: string;
-    let mimeType = 'video/mp4';
-
-    if (url.startsWith('data:')) {
-      const m = url.match(/^data:(video\/[^;]+);base64,/);
-      if (m) mimeType = m[1];
-      const ext = mimeType.split('/')[1]?.split('+')[0] || 'mp4';
-      storagePath = `video_favorites/${id}.${ext}`;
-      const blob = base64ToBytes(url, mimeType);
-      await uploadBlob(blob, storagePath);
-    } else {
-      const { base64, mimeType: mt } = await urlToBase64(url);
-      mimeType = mt;
-      const ext = mimeType.split('/')[1]?.split('+')[0] || 'mp4';
-      storagePath = `video_favorites/${id}.${ext}`;
-      const blob = base64ToBytes(base64, mimeType);
-      await uploadBlob(blob, storagePath);
-    }
-    await supabase.from('video_favorites').insert({ id, storage_path: storagePath, created_at: Date.now() });
-    return { id };
-  } catch (e) {
-    console.error('addVideoToFavorites Supabase', e);
-    return null;
-  }
-}
-
-export async function updateVideoFavoriteChoiceAnalysis(id: string, choiceAnalysis: string): Promise<void> {
-  if (!supabase) return;
-  const { error } = await supabase.from('video_favorites').update({ choice_analysis: choiceAnalysis }).eq('id', id);
-  if (error) console.error('updateVideoFavoriteChoiceAnalysis', error);
-}
-
-export async function loadVideoFavoriteChoiceNotesMap(): Promise<Record<string, string>> {
-  if (!supabase) return {};
-  const { data, error } = await supabase
-    .from('video_favorites')
-    .select('storage_path, choice_analysis')
-    .not('choice_analysis', 'is', null);
-  if (error || !data?.length) return {};
-  const out: Record<string, string> = {};
-  for (const row of data) {
-    if (row.choice_analysis && row.storage_path) {
-      out[getPublicUrl(row.storage_path)] = row.choice_analysis as string;
-    }
-  }
-  return out;
-}
-
-export async function removeVideoFromFavorites(url: string): Promise<void> {
-  if (!supabase) return;
-  try {
-    const path = extractPathFromUrl(url);
-    if (path) {
-      await supabase.storage.from('images').remove([path]);
-      await supabase.from('video_favorites').delete().eq('storage_path', path);
-    } else {
-      console.warn('removeVideoFromFavorites: could not extract path from', url.slice(0, 50));
-    }
-  } catch (e) {
-    console.error('removeVideoFromFavorites Supabase', e);
-  }
-}
-
-// ─── Migration IDB → Supabase ─────────────────────────────────────────────────
 
 export async function migrateFromIDB(): Promise<void> {
-  if (!supabase) return;
-  try {
-    // Check if already migrated (Supabase has data)
-    const [histRes, favRes] = await Promise.all([
-      supabase.from('history').select('id', { count: 'exact', head: true }),
-      supabase.from('favorites').select('id', { count: 'exact', head: true }),
-    ]);
-    if ((histRes.count ?? 0) > 0 || (favRes.count ?? 0) > 0) return;
-
-    const [idbHistory, idbLiked]: [string[] | undefined, string[] | undefined] = await Promise.all([
-      get('fusion_history'),
-      get('fusion_liked'),
-    ]);
-
-    if (!idbHistory?.length && !idbLiked?.length) return;
-
-    console.log('Migrating IDB data to Supabase...');
-    if (idbHistory?.length) {
-      for (const item of idbHistory.slice(0, 50)) {
-        await saveToHistory(item).catch(() => {});
-        await new Promise(r => setTimeout(r, 0));
-      }
-    }
-    if (idbLiked?.length) {
-      for (const base64 of idbLiked) {
-        await addToFavorites(base64).catch(() => {});
-      }
-      // Save liked URLs to IDB as Supabase URLs (so likedSet works after reload)
-      const supabaseLiked = await loadFavorites();
-      if (supabaseLiked.length) await set('fusion_liked', supabaseLiked);
-    }
-    console.log('Migration complete');
-  } catch (e) {
-    console.error('Migration failed', e);
-  }
+  await clearClientMediaCacheOnce();
 }

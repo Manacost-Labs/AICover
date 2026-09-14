@@ -5,10 +5,35 @@ import type { CardLibraryEntry } from './supabaseService';
 const HS_CARDS_CACHE_KEY = 'hs_cards_cache';
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 const HS_CARDS_URL = 'https://api.hearthstonejson.com/v1/latest/enUS/cards.json';
+const IMAGE_INDEX_URL = 'https://image.kolodahs.ru';
 
 interface CachedCards {
   data: Array<{ id: string; dbfId: number }>;
   fetchedAt: number;
+}
+
+interface ImageIndexSearchItem {
+  type: string;
+  id: string;
+  dbf: number;
+  name_ru?: string;
+  name_en?: string;
+}
+
+interface ImageIndexArtItem {
+  group?: string;
+  label?: string;
+  url?: string;
+}
+
+interface ImageIndexArtResponse {
+  id: string;
+  type: string;
+  name?: {
+    ru?: string;
+    en?: string;
+  };
+  images?: ImageIndexArtItem[];
 }
 
 // Decode deckstring → array of dbfIds
@@ -86,4 +111,93 @@ export async function findLibraryCardsInDeck(
   }
 
   return results;
+}
+
+function isFullArtImage(image: ImageIndexArtItem): boolean {
+  const group = String(image.group || '').toLowerCase();
+  const label = String(image.label || '').toLowerCase();
+  return group === 'gallery' || group === 'art' || label.includes('full art');
+}
+
+function proxiedImageUrl(url: string): string {
+  return `/api/image-proxy?url=${encodeURIComponent(url)}`;
+}
+
+async function fetchJson<T>(url: string): Promise<T | null> {
+  try {
+    const response = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload?.data ?? null;
+  } catch (e) {
+    console.error('image index fetch failed', e);
+    return null;
+  }
+}
+
+async function resolveConstructedCard(dbfId: number, cardId?: string): Promise<ImageIndexSearchItem | null> {
+  if (cardId) {
+    const direct = await fetchJson<ImageIndexArtResponse>(
+      `${IMAGE_INDEX_URL}/api/art?type=constructed&id=${encodeURIComponent(cardId)}`
+    );
+    if (direct?.id) {
+      return {
+        type: direct.type || 'constructed',
+        id: direct.id,
+        dbf: dbfId,
+        name_ru: direct.name?.ru,
+        name_en: direct.name?.en,
+      };
+    }
+  }
+
+  const matches = await fetchJson<ImageIndexSearchItem[]>(
+    `${IMAGE_INDEX_URL}/api/search?q=${encodeURIComponent(String(dbfId))}&format=all&limit=10`
+  );
+  return matches?.find((item) => item.type === 'constructed' && Number(item.dbf) === dbfId) ?? null;
+}
+
+async function loadFullArtForCard(
+  dbfId: number,
+  count: number,
+  cardId?: string
+): Promise<Array<{ entry: CardLibraryEntry; count: number }>> {
+  const card = await resolveConstructedCard(dbfId, cardId);
+  if (!card) return [];
+
+  const art = await fetchJson<ImageIndexArtResponse>(
+    `${IMAGE_INDEX_URL}/api/art?type=${encodeURIComponent(card.type)}&id=${encodeURIComponent(card.id)}`
+  );
+  if (!art?.images?.length) return [];
+
+  const fullArts = art.images.filter((image) => image.url && isFullArtImage(image));
+  return fullArts.map((image, index) => {
+    const rawUrl = image.url as string;
+    const name = art.name?.ru || card.name_ru || art.name?.en || card.name_en || card.id;
+    const suffix = fullArts.length > 1 && image.label ? ` — ${image.label}` : '';
+    return {
+      entry: {
+        id: `deck_full_art_${card.id}_${index}`,
+        name: `${name}${suffix}`,
+        cardId: card.id,
+        storageUrl: proxiedImageUrl(rawUrl),
+        storagePath: rawUrl,
+        mimeType: 'image/jpeg',
+        addedAt: Date.now(),
+      },
+      count,
+    };
+  });
+}
+
+// Decode deckstring and return every Full Art found in image.kolodahs.ru for deck cards.
+export async function findDeckFullArtCardsInDeck(
+  deckstring: string
+): Promise<Array<{ entry: CardLibraryEntry; count: number }>> {
+  const cleaned = deckstring.trim();
+  const decoded = decode(cleaned);
+  const dbfToCardId = await getDbfIdToCardIdMap();
+  const jobs = decoded.cards.map(([dbfId, count]) => loadFullArtForCard(dbfId, count, dbfToCardId.get(dbfId)));
+  const nested = await Promise.all(jobs);
+  return nested.flat();
 }

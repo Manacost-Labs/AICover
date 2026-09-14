@@ -16,7 +16,7 @@ import {
   Settings,
   BookOpen,
   Images,
-  Film
+  Paintbrush,
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { get, set } from 'idb-keyval';
@@ -31,7 +31,7 @@ import {
   expandImage,
   analyzeReferenceCompositionVision,
   analyzeFavoriteChoiceVision,
-  analyzeFavoriteVideoChoiceVision,
+  formatGeminiError,
   sceneRolesOrder,
   type SceneRole,
 } from './services/geminiService';
@@ -43,24 +43,13 @@ import {
   loadFavorites, addToFavorites, removeFromFavorites,
   updateFavoriteChoiceAnalysis,
   loadFavoriteChoiceNotesMap,
-  loadVideoHistory,
-  saveVideoToHistory,
-  clearVideoHistory,
-  loadVideoFavorites,
-  addVideoToFavorites,
-  removeVideoFromFavorites,
-  updateVideoFavoriteChoiceAnalysis,
-  loadVideoFavoriteChoiceNotesMap,
   imageUrlToImageSource,
   migrateFromIDB,
   type CardLibraryEntry,
   type ReferenceLibraryEntry,
 } from './services/supabaseService';
-import { ASPECT_RATIOS, RESOLUTIONS, GENERATION_MODELS, MODELS_NO_512PX, VEO_DEFAULT_PROMPT } from './constants';
+import { ASPECT_RATIOS, RESOLUTIONS, GENERATION_MODELS, MODELS_NO_512PX } from './constants';
 import { ImageLightbox } from './components/ImageLightbox';
-import { VideoLightbox } from './components/VideoLightbox';
-import { generateVeoVideoFromImage, type VeoProgressUpdate } from './services/veoService';
-import { videoUrlToFirstFrameSource } from './lib/videoFrame';
 
 const CreateTab = React.lazy(() =>
   import('./components/tabs/CreateTab').then((m) => ({ default: m.CreateTab }))
@@ -77,14 +66,11 @@ const HistoryTab = React.lazy(() =>
 const FavoritesTab = React.lazy(() =>
   import('./components/tabs/FavoritesTab').then((m) => ({ default: m.FavoritesTab }))
 );
-const LibraryTab = React.lazy(() =>
-  import('./components/tabs/LibraryTab').then((m) => ({ default: m.LibraryTab }))
-);
 const ReferencesTab = React.lazy(() =>
   import('./components/tabs/ReferencesTab').then((m) => ({ default: m.ReferencesTab }))
 );
-const VideoTab = React.lazy(() =>
-  import('./components/tabs/VideoTab').then((m) => ({ default: m.VideoTab }))
+const ThumbnailTab = React.lazy(() =>
+  import('./components/tabs/ThumbnailTab').then((m) => ({ default: m.ThumbnailTab }))
 );
 
 // Error Boundary Component
@@ -174,6 +160,15 @@ interface UISource extends ImageSource {
   role?: SceneRole;
 }
 
+type ActiveTab = 'create' | 'thumbnail' | 'history' | 'favorites' | 'upscale' | 'expand' | 'references';
+
+const PRIMARY_NAV_TABS = [
+  { id: 'create' as const, label: 'Создать', caption: 'Генерация', icon: Plus },
+  { id: 'thumbnail' as const, label: 'HS-обложка', caption: 'YouTube', icon: Paintbrush },
+  { id: 'upscale' as const, label: 'Апскейл', caption: '4K', icon: Maximize2 },
+  { id: 'expand' as const, label: 'Формат', caption: 'Расширить', icon: Layout },
+];
+
 function readFileAsDataURL(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -183,8 +178,16 @@ function readFileAsDataURL(file: File): Promise<string> {
   });
 }
 
+function browserMediaFallback(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => {
+    if (typeof item !== 'string') return false;
+    return item.startsWith('data:image/') || item.startsWith('blob:');
+  });
+}
+
 function AppContent() {
-  const [activeTab, setActiveTab] = useState<'create' | 'history' | 'favorites' | 'upscale' | 'expand' | 'video' | 'library' | 'references'>('create');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('create');
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
   const [sources, setSources] = useState<UISource[]>([]);
@@ -208,34 +211,9 @@ function AppContent() {
   /** URL → JSON/text from Gemini: why this favorite vs batch siblings */
   const [favoriteChoiceNotes, setFavoriteChoiceNotes] = useState<Record<string, string>>({});
   const [favoriteAnalysisLoadingUrl, setFavoriteAnalysisLoadingUrl] = useState<string | null>(null);
-  const [likedVideos, setLikedVideos] = useState<string[]>([]);
-  const [videoFavoriteChoiceNotes, setVideoFavoriteChoiceNotes] = useState<Record<string, string>>({});
-  const [videoFavoriteAnalysisLoadingUrl, setVideoFavoriteAnalysisLoadingUrl] = useState<string | null>(null);
-  const [videoHistory, setVideoHistory] = useState<string[]>([]);
-  const [videoSource, setVideoSource] = useState<ImageSource | null>(null);
-  const [veoSettings, setVeoSettings] = useState({
-    model: 'veo-3.1-generate-preview',
-    aspectRatio: '16:9',
-    resolution: '1080p',
-    extraPrompt: '',
-    batchSize: 1 as 1 | 2 | 3 | 4,
-  });
-  const [videoResults, setVideoResults] = useState<string[]>([]);
-  const [isVideoGenerating, setIsVideoGenerating] = useState(false);
-  const [videoProgressPhase, setVideoProgressPhase] = useState<
-    'submitting' | 'polling' | 'finalizing' | null
-  >(null);
-  const [videoProgressPercent, setVideoProgressPercent] = useState(0);
-  const [fullscreenVideo, setFullscreenVideo] = useState<string | null>(null);
-  const cancelVideoGenRef = useRef(false);
-  const videoGenAbortRef = useRef<AbortController | null>(null);
-  const videoResultsRef = useRef<string[]>([]);
-  const likedVideosRef = useRef<string[]>([]);
-  const veoSettingsRef = useRef(veoSettings);
 
   // Memoized values for performance
   const likedSet = React.useMemo(() => new Set(likedImages), [likedImages]);
-  const likedVideoSet = React.useMemo(() => new Set(likedVideos), [likedVideos]);
 
   useEffect(() => {
     sourcesRef.current = sources;
@@ -277,15 +255,6 @@ function AppContent() {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
-  useEffect(() => {
-    videoResultsRef.current = videoResults;
-  }, [videoResults]);
-  useEffect(() => {
-    likedVideosRef.current = likedVideos;
-  }, [likedVideos]);
-  useEffect(() => {
-    veoSettingsRef.current = veoSettings;
-  }, [veoSettings]);
 
   const [history, setHistory] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -362,8 +331,6 @@ function AppContent() {
         const localLiked = localStorage.getItem('fusion_liked');
         let idbHistory = await get('fusion_history');
         let idbLiked = await get('fusion_liked');
-        const idbVideoHistory = await get('fusion_video_history');
-        const idbVideoLiked = await get('fusion_video_liked');
         if (localHistory && !idbHistory) {
           idbHistory = JSON.parse(localHistory);
           await set('fusion_history', idbHistory);
@@ -383,63 +350,28 @@ function AppContent() {
             /* non-fatal */
           }
 
-          const [sbHistory, sbLiked, sbLibrary, sbRefs, sbVideoHistory, sbVideoLiked] = await Promise.all([
+          const [sbHistory, sbLiked, sbLibrary, sbRefs] = await Promise.all([
             loadHistory(),
             loadFavorites(),
             loadCardLibrary(),
             loadReferenceLibrary(),
-            loadVideoHistory(),
-            loadVideoFavorites(),
           ]);
-          if (sbHistory.length) setHistory(sbHistory);
-          else if (idbHistory) setHistory(idbHistory);
-          if (sbLiked.length) setLikedImages(sbLiked);
-          else if (idbLiked) setLikedImages(idbLiked);
-          if (sbVideoHistory.length) setVideoHistory(sbVideoHistory);
-          else if (Array.isArray(idbVideoHistory) && idbVideoHistory.length) setVideoHistory(idbVideoHistory);
-          if (sbVideoLiked.length) setLikedVideos(sbVideoLiked);
-          else if (Array.isArray(idbVideoLiked) && idbVideoLiked.length) setLikedVideos(idbVideoLiked);
+          setHistory(sbHistory);
+          setLikedImages(sbLiked);
           setCardLibrary(sbLibrary);
           setReferenceLibrary(sbRefs);
           try {
-            const [idbFavNotes, sbFavNotes] = await Promise.all([
-              get('fusion_favorite_choice_notes') as Promise<Record<string, string> | undefined>,
-              loadFavoriteChoiceNotesMap(),
-            ]);
-            setFavoriteChoiceNotes({
-              ...(idbFavNotes && typeof idbFavNotes === 'object' ? idbFavNotes : {}),
-              ...sbFavNotes,
-            });
-          } catch {
-            /* non-fatal */
-          }
-          try {
-            const [idbVideoNotes, sbVideoNotes] = await Promise.all([
-              get('fusion_video_favorite_choice_notes') as Promise<Record<string, string> | undefined>,
-              loadVideoFavoriteChoiceNotesMap(),
-            ]);
-            setVideoFavoriteChoiceNotes({
-              ...(idbVideoNotes && typeof idbVideoNotes === 'object' ? idbVideoNotes : {}),
-              ...sbVideoNotes,
-            });
+            setFavoriteChoiceNotes(await loadFavoriteChoiceNotesMap());
           } catch {
             /* non-fatal */
           }
         } else {
           // Fallback to IDB only
-          if (idbHistory) setHistory(idbHistory);
-          if (idbLiked) setLikedImages(idbLiked);
-          if (Array.isArray(idbVideoHistory) && idbVideoHistory.length) setVideoHistory(idbVideoHistory);
-          if (Array.isArray(idbVideoLiked) && idbVideoLiked.length) setLikedVideos(idbVideoLiked);
+          setHistory(browserMediaFallback(idbHistory));
+          setLikedImages(browserMediaFallback(idbLiked));
           try {
             const idbFavNotes = await get('fusion_favorite_choice_notes') as Record<string, string> | undefined;
             if (idbFavNotes && typeof idbFavNotes === 'object') setFavoriteChoiceNotes(idbFavNotes);
-          } catch {
-            /* non-fatal */
-          }
-          try {
-            const idbVideoNotes = await get('fusion_video_favorite_choice_notes') as Record<string, string> | undefined;
-            if (idbVideoNotes && typeof idbVideoNotes === 'object') setVideoFavoriteChoiceNotes(idbVideoNotes);
           } catch {
             /* non-fatal */
           }
@@ -450,21 +382,11 @@ function AppContent() {
         try {
           const idbHistory = await get('fusion_history');
           const idbLiked = await get('fusion_liked');
-          const idbVH = await get('fusion_video_history');
-          const idbVL = await get('fusion_video_liked');
-          if (idbHistory) setHistory(idbHistory);
-          if (idbLiked) setLikedImages(idbLiked);
-          if (Array.isArray(idbVH) && idbVH.length) setVideoHistory(idbVH);
-          if (Array.isArray(idbVL) && idbVL.length) setLikedVideos(idbVL);
+          setHistory(browserMediaFallback(idbHistory));
+          setLikedImages(browserMediaFallback(idbLiked));
           try {
             const idbFavNotes = await get('fusion_favorite_choice_notes') as Record<string, string> | undefined;
             if (idbFavNotes && typeof idbFavNotes === 'object') setFavoriteChoiceNotes(idbFavNotes);
-          } catch {
-            /* non-fatal */
-          }
-          try {
-            const idbVideoNotes = await get('fusion_video_favorite_choice_notes') as Record<string, string> | undefined;
-            if (idbVideoNotes && typeof idbVideoNotes === 'object') setVideoFavoriteChoiceNotes(idbVideoNotes);
           } catch {
             /* non-fatal */
           }
@@ -749,11 +671,11 @@ function AppContent() {
       
       const newHistory = [upscaledUrl, ...history].slice(0, 50);
       setHistory(newHistory);
-      await set('fusion_history', newHistory);
       if (isSupabaseConfigured) saveToHistory(upscaledUrl).catch(() => {});
+      else await set('fusion_history', newHistory);
     } catch (err: any) {
       console.error(err);
-      const errorMessage = err.message || "Ошибка при апскейле";
+      const errorMessage = formatGeminiError(err);
       
       if (activeTab === 'upscale') {
         setUpscaleResults(prev => prev.map(item => 
@@ -791,11 +713,11 @@ function AppContent() {
       
       const newHistory = [expandedUrl, ...history].slice(0, 50);
       setHistory(newHistory);
-      await set('fusion_history', newHistory);
       if (isSupabaseConfigured) saveToHistory(expandedUrl).catch(() => {});
+      else await set('fusion_history', newHistory);
     } catch (err: any) {
       console.error(err);
-      const errorMessage = err.message || "Ошибка при расширении";
+      const errorMessage = formatGeminiError(err);
       setExpandResults(prev => prev.map(item => 
         item.id === expandId ? { ...item, status: 'error', error: errorMessage } : item
       ));
@@ -840,16 +762,17 @@ function AppContent() {
       setResults(images);
       const newHistory = [...images, ...history].slice(0, 100);
       setHistory(newHistory);
-      await set('fusion_history', newHistory);
       if (isSupabaseConfigured) {
         for (const img of images) {
           saveToHistory(img).catch(() => {});
         }
+      } else {
+        await set('fusion_history', newHistory);
       }
     } catch (err: any) {
       if (cancelGenerationRef.current) return;
       console.error(err);
-      setError(err.message || "Генерация не удалась. Пожалуйста, попробуйте снова.");
+      setError(formatGeminiError(err));
       if (err.message?.includes("Requested entity was not found")) {
         setHasKey(false);
       }
@@ -906,7 +829,7 @@ function AppContent() {
         const newLikes = likedImagesRef.current.filter(item => item !== url);
         setLikedImages(newLikes);
         likedImagesRef.current = newLikes;
-        await set('fusion_liked', newLikes);
+        if (!isSupabaseConfigured) await set('fusion_liked', newLikes);
         setFavoriteChoiceNotes(prev => {
           const next = { ...prev };
           delete next[url];
@@ -927,172 +850,18 @@ function AppContent() {
       const newLikes = [...likedImagesRef.current, url];
       setLikedImages(newLikes);
       likedImagesRef.current = newLikes;
-      await set('fusion_liked', newLikes);
       let favId: string | null = null;
       if (isSupabaseConfigured) {
         const res = await addToFavorites(url);
         favId = res?.id ?? null;
+        if (!res) await set('fusion_liked', newLikes);
+      } else {
+        await set('fusion_liked', newLikes);
       }
       void runFavoriteChoiceAnalysis(url, favId, resultsRef.current.slice());
     },
     [runFavoriteChoiceAnalysis]
   );
-
-  const runVideoFavoriteChoiceAnalysis = React.useCallback(async (
-    url: string,
-    favoriteRowId: string | null,
-    batchSnapshot?: string[]
-  ) => {
-    setVideoFavoriteAnalysisLoadingUrl(url);
-    try {
-      const chosen = await videoUrlToFirstFrameSource(url);
-      const batch = batchSnapshot ?? videoResultsRef.current;
-      const siblings = batch.filter((u) => u !== url);
-      const alternatives: ImageSource[] = [];
-      for (const u of siblings.slice(0, 3)) {
-        alternatives.push(await videoUrlToFirstFrameSource(u));
-      }
-      const text = await analyzeFavoriteVideoChoiceVision(chosen, alternatives, {
-        userPromptHint: veoSettingsRef.current.extraPrompt,
-      });
-      setVideoFavoriteChoiceNotes((prev) => ({ ...prev, [url]: text }));
-      const existing = (await get('fusion_video_favorite_choice_notes')) as Record<string, string> | undefined;
-      await set('fusion_video_favorite_choice_notes', {
-        ...(existing && typeof existing === 'object' ? existing : {}),
-        [url]: text,
-      });
-      if (favoriteRowId && isSupabaseConfigured) {
-        await updateVideoFavoriteChoiceAnalysis(favoriteRowId, text);
-      }
-    } catch (e) {
-      console.error('runVideoFavoriteChoiceAnalysis', e);
-    } finally {
-      setVideoFavoriteAnalysisLoadingUrl(null);
-    }
-  }, []);
-
-  const toggleVideoLike = React.useCallback(
-    async (url: string) => {
-      const isLiked = likedVideosRef.current.includes(url);
-      if (isLiked) {
-        const newLikes = likedVideosRef.current.filter((item) => item !== url);
-        setLikedVideos(newLikes);
-        likedVideosRef.current = newLikes;
-        await set('fusion_video_liked', newLikes);
-        setVideoFavoriteChoiceNotes((prev) => {
-          const next = { ...prev };
-          delete next[url];
-          return next;
-        });
-        try {
-          const idbNotes = (await get('fusion_video_favorite_choice_notes')) as Record<string, string> | undefined;
-          if (idbNotes && typeof idbNotes === 'object' && idbNotes[url]) {
-            delete idbNotes[url];
-            await set('fusion_video_favorite_choice_notes', idbNotes);
-          }
-        } catch (e) {
-          console.error(e);
-        }
-        if (isSupabaseConfigured) removeVideoFromFavorites(url).catch(() => {});
-        return;
-      }
-      const newLikes = [...likedVideosRef.current, url];
-      setLikedVideos(newLikes);
-      likedVideosRef.current = newLikes;
-      await set('fusion_video_liked', newLikes);
-      let favId: string | null = null;
-      if (isSupabaseConfigured) {
-        const res = await addVideoToFavorites(url);
-        favId = res?.id ?? null;
-      }
-      void runVideoFavoriteChoiceAnalysis(url, favId, videoResultsRef.current.slice());
-    },
-    [runVideoFavoriteChoiceAnalysis]
-  );
-
-  const handleGenerateVideo = async () => {
-    if (!videoSource) {
-      setError('Загрузите изображение для анимации.');
-      return;
-    }
-    setError(null);
-    setIsVideoGenerating(true);
-    cancelVideoGenRef.current = false;
-    videoGenAbortRef.current = new AbortController();
-    setVideoProgressPhase('submitting');
-    setVideoProgressPercent(0);
-    try {
-      const urls = await generateVeoVideoFromImage(
-        videoSource,
-        VEO_DEFAULT_PROMPT,
-        {
-          model: veoSettings.model,
-          aspectRatio: veoSettings.aspectRatio,
-          resolution: veoSettings.resolution,
-          extraPrompt: veoSettings.extraPrompt,
-          batchSize: veoSettings.batchSize,
-        },
-        (u: VeoProgressUpdate) => {
-          setVideoProgressPhase(u.phase);
-          setVideoProgressPercent(u.percent);
-        },
-        videoGenAbortRef.current.signal
-      );
-      if (cancelVideoGenRef.current) return;
-      setVideoResults(urls);
-      videoResultsRef.current = urls;
-      setVideoHistory((prev) => {
-        const vh = [...urls, ...prev].slice(0, 50);
-        void set('fusion_video_history', vh);
-        return vh;
-      });
-      if (isSupabaseConfigured) {
-        for (const u of urls) saveVideoToHistory(u).catch(() => {});
-      }
-    } catch (err: unknown) {
-      if (cancelVideoGenRef.current) return;
-      const aborted =
-        err instanceof Error &&
-        (err.name === 'AbortError' || err.message === 'Отменено');
-      if (aborted) return;
-      console.error(err);
-      const msg = err instanceof Error ? err.message : 'Ошибка генерации видео';
-      setError(msg);
-    } finally {
-      videoGenAbortRef.current = null;
-      setIsVideoGenerating(false);
-      setVideoProgressPhase(null);
-      setVideoProgressPercent(0);
-    }
-  };
-
-  const handleCancelVideoGeneration = () => {
-    cancelVideoGenRef.current = true;
-    videoGenAbortRef.current?.abort();
-    setIsVideoGenerating(false);
-    setVideoProgressPhase(null);
-    setVideoProgressPercent(0);
-  };
-
-  const handleClearVideoFields = () => {
-    if (isVideoGenerating) {
-      cancelVideoGenRef.current = true;
-      videoGenAbortRef.current?.abort();
-      setIsVideoGenerating(false);
-      setVideoProgressPhase(null);
-      setVideoProgressPercent(0);
-    }
-    setVideoSource(null);
-    setVeoSettings({
-      model: 'veo-3.1-generate-preview',
-      aspectRatio: '16:9',
-      resolution: '1080p',
-      extraPrompt: '',
-      batchSize: 1,
-    });
-    setVideoResults([]);
-    setError(null);
-  };
 
   const handleSaveCard = React.useCallback(async (name: string, cardId: string, imageData: string, mimeType: string) => {
     setIsSavingCard(true);
@@ -1240,7 +1009,18 @@ function AppContent() {
     return roles.every(r => sources.some(s => s.role === r));
   }, [createLayoutMode, scenePlan, sources]);
 
-  const canRunVideo = React.useMemo(() => !!videoSource, [videoSource]);
+  const primaryNavTabs = PRIMARY_NAV_TABS;
+  const libraryNavTabs = [
+    { id: 'history' as const, label: 'История', caption: `${history.length}`, icon: Layout },
+    { id: 'favorites' as const, label: 'Избранное', caption: `${likedImages.length}`, icon: ImageIcon },
+    { id: 'references' as const, label: 'Референсы', caption: `${referenceLibrary.length}`, icon: Images },
+  ];
+  const activeTabMeta = [...primaryNavTabs, ...libraryNavTabs].find(tab => tab.id === activeTab);
+  const generationQueue = [
+    { id: 'preparing', label: 'Анализ', active: generationProgress?.phase === 'preparing', done: Boolean(generationProgress) && generationProgress.phase !== 'preparing' },
+    { id: 'generating', label: 'Генерация', active: generationProgress?.phase === 'generating', done: Boolean(generationProgress) && generationProgress.phase === 'strict' },
+    { id: 'strict', label: 'QA', active: generationProgress?.phase === 'strict', done: false },
+  ];
 
   const updateReference = React.useCallback((r: ImageSource | null) => {
     setReference(r);
@@ -1334,7 +1114,7 @@ function AppContent() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-indigo-500/30 relative overflow-hidden">
+    <div className="relative min-h-screen overflow-hidden bg-canvas font-sans text-zinc-100">
       {/* Dynamic Background */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
         <motion.div 
@@ -1342,186 +1122,191 @@ function AppContent() {
             x: bgX1,
             y: bgY1,
           }}
-          className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.08)_0%,transparent_50%)]" 
+          className="absolute left-[-20%] top-[-20%] h-[140%] w-[140%] bg-[radial-gradient(circle_at_50%_50%,rgba(240,184,75,0.035)_0%,transparent_48%)]"
         />
         <motion.div 
           style={{ 
             x: bgX2,
             y: bgY2,
           }}
-          className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(circle_at_80%_20%,rgba(99,102,241,0.08)_0%,transparent_50%)]" 
-        />
-        <motion.div 
-          animate={{ 
-            scale: [1, 1.1, 1],
-            opacity: [0.3, 0.5, 0.3]
-          }}
-          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute top-[20%] right-[10%] w-[40%] h-[40%] bg-indigo-500/5 blur-[120px] rounded-full"
-        />
-        <motion.div 
-          animate={{ 
-            scale: [1.1, 1, 1.1],
-            opacity: [0.2, 0.4, 0.2]
-          }}
-          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute bottom-[10%] left-[10%] w-[50%] h-[50%] bg-blue-500/5 blur-[150px] rounded-full"
+          className="absolute left-[-20%] top-[-20%] h-[140%] w-[140%] bg-[radial-gradient(circle_at_80%_20%,rgba(116,82,166,0.035)_0%,transparent_48%)]"
         />
       </div>
 
-      {/* Header — скрыт в полноэкранном просмотре изображения или видео */}
-      <header
-        className={`border-b border-white/5 bg-zinc-950/80 backdrop-blur-2xl sticky top-0 z-50 ${fullscreenImage || fullscreenVideo ? 'hidden' : ''}`}
-        aria-hidden={fullscreenImage || fullscreenVideo ? true : undefined}
+      {/* Sidebar — скрыт в полноэкранном просмотре изображения */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 hidden w-[244px] border-r border-line bg-canvas/95 backdrop-blur-xl lg:flex lg:flex-col ${fullscreenImage ? 'lg:hidden' : ''}`}
+        aria-hidden={fullscreenImage ? true : undefined}
       >
-        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-10">
-            <div
-              className="flex items-center gap-3 group cursor-pointer"
-              onClick={() => setActiveTab('create')}
-              title="Cover — главная"
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setActiveTab('create');
-                }
-              }}
-            >
-              <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20 group-hover:scale-110 transition-transform">
-                <Sparkles className="w-6 h-6 text-white" />
-              </div>
-              <div className="flex flex-col leading-none">
-                <span className="font-black text-xl tracking-tight text-white">Cover</span>
-                <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mt-0.5">Обложки</span>
-              </div>
+        <div className="flex h-full flex-col px-3 py-4">
+          <button
+            type="button"
+            className="group flex items-center gap-3 rounded-xl border border-line bg-panel p-2.5 text-left transition-colors hover:border-line-strong hover:bg-panel-raised"
+            onClick={() => setActiveTab('create')}
+            title="Cover — главная"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent text-zinc-950 shadow-lg shadow-amber-950/20 transition-transform group-hover:scale-105">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <span className="block font-display text-xl font-black tracking-tight text-white">Cover</span>
+              <span className="block text-[9px] font-bold uppercase tracking-[0.22em] text-zinc-500">AI deck studio</span>
+            </div>
+          </button>
+
+          <nav className="mt-6 flex-1 space-y-6 overflow-y-auto pr-1">
+            <div className="space-y-2">
+              <p className="px-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Инструменты</p>
+              {primaryNavTabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`group flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors ${activeTab === tab.id ? 'bg-accent text-zinc-950 shadow-lg shadow-amber-950/20' : 'text-zinc-400 hover:bg-panel-raised hover:text-white'}`}
+                >
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${activeTab === tab.id ? 'bg-zinc-950 text-accent-bright' : 'bg-panel-soft text-zinc-400 group-hover:text-accent-bright'}`}>
+                    <tab.icon className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold">{tab.label}</span>
+                    <span className={`block text-[9px] font-semibold uppercase tracking-[0.16em] ${activeTab === tab.id ? 'text-zinc-700' : 'text-zinc-600'}`}>{tab.caption}</span>
+                  </span>
+                </button>
+              ))}
             </div>
 
-            <nav className="hidden md:flex items-center gap-4">
-              <div className="flex items-center gap-2">
+            <div className="space-y-2">
+              <p className="px-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Хранилище</p>
+              {libraryNavTabs.map((tab) => (
                 <button
-                  onClick={() => setActiveTab('create')}
-                  className={`px-6 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'create' ? 'bg-white text-zinc-950 shadow-lg' : 'bg-zinc-900 text-white hover:bg-zinc-800'}`}
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors ${activeTab === tab.id ? 'bg-accent-soft text-accent-bright ring-1 ring-amber-300/25' : 'text-zinc-400 hover:bg-panel-raised hover:text-white'}`}
                 >
-                  <Plus className="w-4 h-4" />
-                  Создать
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-panel-soft text-zinc-400">
+                    <tab.icon className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1 text-sm font-medium">{tab.label}</span>
+                  <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-[10px] font-semibold text-zinc-500 ring-1 ring-line">{tab.caption}</span>
                 </button>
-                <button
-                  onClick={() => setActiveTab('upscale')}
-                  className={`px-6 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'upscale' ? 'bg-white text-zinc-950 shadow-lg' : 'bg-zinc-900 text-white hover:bg-zinc-800'}`}
-                >
-                  <Maximize2 className="w-4 h-4" />
-                  Апскейл
-                </button>
-                <button
-                  onClick={() => setActiveTab('expand')}
-                  className={`px-6 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'expand' ? 'bg-white text-zinc-950 shadow-lg' : 'bg-zinc-900 text-white hover:bg-zinc-800'}`}
-                >
-                  <Layout className="w-4 h-4" />
-                  Формат
-                </button>
-                <button
-                  onClick={() => setActiveTab('video')}
-                  className={`px-6 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'video' ? 'bg-white text-zinc-950 shadow-lg' : 'bg-zinc-900 text-white hover:bg-zinc-800'}`}
-                >
-                  <Film className="w-4 h-4" />
-                  Видео
-                </button>
-              </div>
+              ))}
+            </div>
+          </nav>
 
-              <div className="h-6 w-px bg-white/10 mx-2" />
-
-              <div className="flex items-center gap-1">
-                {[
-                  { id: 'history', label: 'История', icon: Layout },
-                  { id: 'favorites', label: 'Избранное', icon: ImageIcon },
-                  { id: 'library', label: 'Библиотека', icon: BookOpen },
-                  { id: 'references', label: 'Референсы', icon: Images },
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id as any)}
-                    className={`px-5 py-2 rounded-full text-sm font-bold transition-all flex items-center gap-2 ${activeTab === tab.id ? 'text-white' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-                  >
-                    <tab.icon className="w-4 h-4" />
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-            </nav>
-          </div>
-
-          <div className="flex items-center gap-6">
-            <button
-              onClick={() => setShowSettings(true)}
-              className="p-2.5 rounded-full bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all"
-              title="Настройки промпта"
-            >
-              <Settings className="w-5 h-5" />
-            </button>
-            <button
-              onClick={() => { setSources([]); setReference(null); setResults([]); setBaseImage(null); }}
-              className="text-sm font-bold text-zinc-500 hover:text-white transition-colors uppercase tracking-widest"
-            >
-              Сброс
-            </button>
-            <button 
-              onClick={activeTab === 'video' ? handleGenerateVideo : handleGenerate}
-              disabled={
-                activeTab === 'video'
-                  ? isVideoGenerating || !canRunVideo
-                  : isGenerating || !canRunCover
-              }
-              className={`px-8 py-3 font-black rounded-full hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-xl uppercase tracking-tighter text-sm ${activeTab === 'video' ? 'bg-violet-600 text-white shadow-violet-500/40' : baseImage ? 'bg-indigo-600 text-white shadow-indigo-500/40' : 'bg-white text-zinc-950 shadow-white/20'}`}
-            >
-              {activeTab === 'video' ? (
-                isVideoGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Film className="w-4 h-4" />
-              ) : isGenerating ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Sparkles className="w-4 h-4" />
+          {activeTab !== 'thumbnail' ? (
+          <div className="mt-4 space-y-3 border-t border-white/10 pt-4">
+            <AnimatePresence>
+              {isGenerating && generationProgress && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 8 }}
+                  className="rounded-xl border border-indigo-400/25 bg-indigo-500/10 p-3"
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-200">Queue</span>
+                    <span className="text-[10px] font-black text-white">{generationProgress.done}/{generationProgress.total}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {generationQueue.map((step) => (
+                      <div key={step.id} className={`h-1.5 rounded-full ${step.active ? 'bg-white' : step.done ? 'bg-emerald-400' : 'bg-white/15'}`} />
+                    ))}
+                  </div>
+                </motion.div>
               )}
-              {activeTab === 'video' ? 'Видео' : baseImage ? 'Доработать' : 'Создать'}
+            </AnimatePresence>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setShowSettings(true)}
+                className="flex items-center justify-center gap-2 rounded-xl bg-white/[0.06] px-3 py-2.5 text-xs font-black text-zinc-200 transition-all hover:bg-white/12 hover:text-white"
+                title="Настройки промпта"
+              >
+                <Settings className="h-4 w-4" />
+                Промпт
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSources([]); setReference(null); setResults([]); setBaseImage(null); }}
+                className="rounded-xl bg-white/[0.06] px-3 py-2.5 text-xs font-black uppercase tracking-widest text-zinc-500 transition-all hover:bg-red-500/10 hover:text-red-300"
+              >
+                Сброс
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={isGenerating || !canRunCover}
+              className={`flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3.5 text-sm font-black uppercase tracking-tight shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45 ${baseImage ? 'bg-indigo-600 text-white shadow-indigo-500/35' : 'bg-white text-zinc-950 shadow-white/15'}`}
+            >
+              {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {baseImage ? 'Доработать' : 'Создать'}
             </button>
           </div>
+          ) : (
+            <div className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-amber-300/20 bg-accent-soft p-3 text-center text-[10px] font-semibold uppercase tracking-[0.16em] text-accent-bright">
+              <Paintbrush className="h-3.5 w-3.5" /> Редактор обложки
+            </div>
+          )}
         </div>
+      </aside>
 
-        {isGenerating && generationProgress && (
-          <div className="relative h-1 w-full overflow-hidden bg-zinc-900 border-t border-white/5">
-            {generationProgress.phase === 'preparing' || generationProgress.phase === 'strict' ? (
+      {!fullscreenImage && (
+        <header className="sticky top-0 z-50 border-b border-line bg-canvas/92 backdrop-blur-2xl lg:hidden">
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <button type="button" onClick={() => setActiveTab('create')} className="flex min-w-0 items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-zinc-950">
+                <Sparkles className="h-5 w-5" />
+              </span>
+              <span className="min-w-0 text-left">
+                <span className="block font-display text-base font-black text-white">Cover</span>
+                <span className="block truncate text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-500">{activeTabMeta?.label}</span>
+              </span>
+            </button>
+            {activeTab !== 'thumbnail' ? <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={isGenerating || !canRunCover}
+              className={`flex shrink-0 items-center gap-2 rounded-2xl px-4 py-2.5 text-xs font-black uppercase disabled:opacity-45 ${baseImage ? 'bg-indigo-600 text-white' : 'bg-white text-zinc-950'}`}
+            >
+              {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {baseImage ? 'Доработать' : 'Создать'}
+            </button> : <span className="rounded-xl bg-accent-soft px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-accent-bright">Редактор 16:9</span>}
+          </div>
+          <nav className="flex gap-2 overflow-x-auto px-4 pb-3">
+            {[...primaryNavTabs, ...libraryNavTabs].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex shrink-0 items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition-colors ${activeTab === tab.id ? 'bg-accent text-zinc-950' : 'bg-panel text-zinc-400'}`}
+              >
+                <tab.icon className="h-4 w-4" />
+                {tab.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowSettings(true)}
+              className="flex shrink-0 items-center gap-2 rounded-full bg-zinc-900 px-4 py-2 text-xs font-black text-zinc-400"
+            >
+              <Settings className="h-4 w-4" />
+              Промпт
+            </button>
+          </nav>
+          {isGenerating && generationProgress && (
+            <div className="h-1 overflow-hidden bg-zinc-900">
               <motion.div
-                className="absolute top-0 h-full w-[38%] rounded-full bg-gradient-to-r from-indigo-600 to-violet-500 shadow-[0_0_12px_rgba(99,102,241,0.6)]"
-                initial={{ left: '-38%' }}
-                animate={{ left: ['-38%', '100%'] }}
-                transition={{ duration: 1.15, repeat: Infinity, ease: 'linear' }}
-              />
-            ) : (
-              <motion.div
-                className="h-full rounded-full bg-gradient-to-r from-indigo-600 to-violet-500"
+                className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-cyan-300"
                 initial={{ width: '0%' }}
-                animate={{
-                  width: `${Math.min(
-                    100,
-                    (generationProgress.done / Math.max(1, generationProgress.total)) * 100
-                  )}%`,
-                }}
+                animate={{ width: generationProgress.phase === 'generating' ? `${Math.min(100, (generationProgress.done / Math.max(1, generationProgress.total)) * 100)}%` : '62%' }}
                 transition={{ duration: 0.35, ease: 'easeOut' }}
               />
-            )}
-          </div>
-        )}
-        {isVideoGenerating && videoProgressPhase && (
-          <div className="relative h-1 w-full overflow-hidden bg-zinc-900 border-t border-white/5">
-            <motion.div
-              className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 shadow-[0_0_12px_rgba(139,92,246,0.5)]"
-              initial={{ width: '0%' }}
-              animate={{ width: `${Math.min(100, Math.max(0, videoProgressPercent))}%` }}
-              transition={{ duration: 0.25, ease: 'easeOut' }}
-            />
-          </div>
-        )}
-      </header>
+            </div>
+          )}
+        </header>
+      )}
 
       {/* Settings Modal — centered */}
       <AnimatePresence>
@@ -1820,7 +1605,7 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
         )}
       </AnimatePresence>
 
-      <main className="max-w-7xl mx-auto p-6 relative z-10">
+      <main className="relative z-10 mx-auto w-full max-w-[1720px] p-4 sm:p-6 lg:ml-[244px] lg:w-[calc(100%-244px)] lg:p-7 xl:p-8">
         <AnimatePresence>
           {(isUpscaling && (activeTab === 'history' || activeTab === 'favorites')) && (
             <motion.div
@@ -1865,7 +1650,9 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
                 </div>
               }
             >
-          {activeTab === 'upscale' ? (
+          {activeTab === 'thumbnail' ? (
+            <ThumbnailTab key="thumbnail" />
+          ) : activeTab === 'upscale' ? (
             <UpscaleTab 
               key="upscale"
               upscaleSource={upscaleSource}
@@ -1905,25 +1692,6 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
               }}
               error={error}
               ASPECT_RATIOS={ASPECT_RATIOS}
-            />
-          ) : activeTab === 'video' ? (
-            <VideoTab
-              key="video"
-              sourceImage={videoSource}
-              setSourceImage={setVideoSource}
-              veoSettings={veoSettings}
-              setVeoSettings={setVeoSettings}
-              isGenerating={isVideoGenerating}
-              videoProgressPhase={videoProgressPhase}
-              videoProgressPercent={videoProgressPercent}
-              onGenerate={handleGenerateVideo}
-              onCancel={handleCancelVideoGeneration}
-              onClearAllFields={handleClearVideoFields}
-              videoResults={videoResults}
-              likedVideoSet={likedVideoSet}
-              toggleVideoLike={toggleVideoLike}
-              setFullscreenVideo={setFullscreenVideo}
-              error={error}
             />
           ) : activeTab === 'create' ? (
             <CreateTab
@@ -1992,11 +1760,6 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
               toggleLike={toggleLike}
               handleUpscale={handleUpscale}
               setFullscreenImage={setFullscreenImage}
-              videoHistory={videoHistory}
-              setVideoHistory={setVideoHistory}
-              likedVideoSet={likedVideoSet}
-              toggleVideoLike={toggleVideoLike}
-              setFullscreenVideo={setFullscreenVideo}
               onRefine={(url) => {
                 setBaseImage({ data: url, mimeType: 'image/png' });
                 setActiveTab('create');
@@ -2014,27 +1777,12 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
               favoriteAnalysisLoadingUrl={favoriteAnalysisLoadingUrl}
               handleUpscale={handleUpscale}
               setFullscreenImage={setFullscreenImage}
-              likedVideos={likedVideos}
-              likedVideoSet={likedVideoSet}
-              toggleVideoLike={toggleVideoLike}
-              videoFavoriteChoiceNotes={videoFavoriteChoiceNotes}
-              videoFavoriteAnalysisLoadingUrl={videoFavoriteAnalysisLoadingUrl}
-              setFullscreenVideo={setFullscreenVideo}
               onRefine={(url) => {
                 setBaseImage({ data: url, mimeType: 'image/png' });
                 setActiveTab('create');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
                 setTimeout(() => promptRef.current?.focus(), 100);
               }}
-            />
-          ) : activeTab === 'library' ? (
-            <LibraryTab
-              key="library"
-              cardLibrary={cardLibrary}
-              onSaveCard={handleSaveCard}
-              onDeleteCard={handleDeleteCard}
-              setFullscreenImage={setFullscreenImage}
-              isSaving={isSavingCard}
             />
           ) : activeTab === 'references' ? (
             <ReferencesTab
@@ -2066,12 +1814,6 @@ AVOID: ${settings.negativePrompt ? settings.negativePrompt + ', ' : ''}redrawing
             counterLabel={lightboxImages.length > 1 ? `${lightboxIndex + 1} / ${lightboxImages.length}` : null}
           />
           </React.Fragment>
-        )}
-        {fullscreenVideo && (
-          <VideoLightbox
-            videoUrl={fullscreenVideo}
-            onClose={() => setFullscreenVideo(null)}
-          />
         )}
       </AnimatePresence>
     </div>
